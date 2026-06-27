@@ -1,0 +1,50 @@
+# Docker build context excludes — keep image lean and the build cache hot.
+# Per .planning/phases/01-setup-infra/01-RESEARCH.md Pitfall 3 (image size).
+
+# Git
+.git
+.github
+.gitignore
+
+# Python virtualenvs / caches
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Build artifacts
+dist
+build
+*.egg-info
+
+# Planning / docs (not needed at runtime)
+.planning
+docs
+tests
+*.md
+!README.md
+
+# Env files — never ship secrets into images
+.env
+.env.*
+!.env.example
+
+# Dockerfiles themselves (avoid recursive context)
+Dockerfile*
+.dockerignore
+
+# Dev tooling
+.pre-commit-config.yaml
+.python-version
+
+# OS / IDE noise
+.DS_Store
+.idea
+.vscode
