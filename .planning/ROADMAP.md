@@ -6,7 +6,7 @@ Granularity: coarse — cada fase entrega valor verificable. Las fases se ejecut
 
 ---
 
-## F0 — Setup infra
+## Phase 1: Setup infra
 
 **Goal**: Toda la infraestructura del microservicio corriendo en Railway, lista para recibir código.
 
@@ -37,7 +37,7 @@ Granularity: coarse — cada fase entrega valor verificable. Las fases se ejecut
 
 ---
 
-## F1 — Integración SoftSeguros + WhatsApp Cloud API
+## Phase 2: Integración SoftSeguros + WhatsApp Cloud API
 
 **Goal**: Round-trip primer mensaje cliente↔bot funciona end-to-end, sin lógica todavía (echo bot + consulta SoftSeguros aislada).
 
@@ -67,7 +67,7 @@ Granularity: coarse — cada fase entrega valor verificable. Las fases se ejecut
 
 ---
 
-## F2 — Bot Q&A inbound + Chatwoot mirror
+## Phase 3: Bot Q&A inbound + Chatwoot mirror
 
 **Goal**: El bot responde preguntas reales sobre saldo, estado y coberturas para la póliza correcta, con LLM-as-judge validando cada salida, y toda la conversación se mirrora a Chatwoot desde el mensaje #1.
 
@@ -106,7 +106,7 @@ Granularity: coarse — cada fase entrega valor verificable. Las fases se ejecut
 
 ---
 
-## F3 — Flujo de validación de pago + Chatwoot escalación bidireccional
+## Phase 4: Flujo de validación de pago + Chatwoot escalación bidireccional
 
 **Goal**: Cliente puede enviar comprobante por WhatsApp, cartera valida via su número existente, el bot cierra o escala. Humano en Chatwoot puede tomar control de la conversación y sus respuestas llegan al cliente.
 
@@ -145,7 +145,7 @@ Granularity: coarse — cada fase entrega valor verificable. Las fases se ejecut
 
 ---
 
-## F4 — Seguridad y audit log
+## Phase 5: Seguridad y audit log
 
 **Goal**: Las 13 capas de seguridad declaradas en PROJECT.md están implementadas, verificadas con tests adversarios en CI, y el audit log inmutable funciona como fuente de verdad para compliance.
 
@@ -180,7 +180,7 @@ Granularity: coarse — cada fase entrega valor verificable. Las fases se ejecut
 
 ---
 
-## F5 — Integración con voice agent (handoff + memoria L3/L4)
+## Phase 6: Integración con voice agent (handoff + memoria L3/L4)
 
 **Goal**: lambda-proyect puede ceder un caso al WhatsApp agent con contexto completo, y el WhatsApp agent puede leer/escribir el caso unificado para mantener continuidad cross-canal.
 
@@ -211,7 +211,7 @@ Granularity: coarse — cada fase entrega valor verificable. Las fases se ejecut
 
 ---
 
-## F6 — Deploy a prod + observability
+## Phase 7: Deploy a prod + observability
 
 **Goal**: Servicio live en producción atendiendo tráfico real de DPG, con observability completa, dashboards, alertas y runbooks.
 
