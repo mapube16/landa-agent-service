@@ -19,6 +19,10 @@ repos:
           - pydantic-settings
           - types-redis
           - "sqlalchemy[mypy]"
+          # Plan 01-02 adds modules that import structlog / sentry-sdk;
+          # pre-commit's isolated mypy env needs them for --strict to pass.
+          - structlog==26.1.0
+          - "sentry-sdk[fastapi]==2.63.0"
         args: [--strict, --explicit-package-bases]
         files: ^app/
   - repo: https://github.com/pre-commit/pre-commit-hooks
