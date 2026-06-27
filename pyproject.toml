@@ -1,0 +1,81 @@
+[project]
+name = "landa-agent-service"
+version = "0.1.0"
+description = "LANDA Tech WhatsApp agent for DPG Seguros — Q&A inbound + payment validation flow"
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+dependencies = [
+    "fastapi==0.138.1",
+    "uvicorn[standard]==0.49.0",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "langgraph==1.2.6",
+    "langgraph-checkpoint-postgres==3.1.0",
+    "langchain==1.3.11",
+    "langchain-openai==1.3.3",
+    "langsmith==0.9.3",
+    "asyncpg==0.31.0",
+    "psycopg[binary,pool]==3.3.4",
+    "sqlalchemy==2.0.51",
+    "alembic==1.18.5",
+    "redis==8.0.1",
+    "arq==0.28.0",
+    "httpx==0.28.1",
+    "structlog==26.1.0",
+    "sentry-sdk[fastapi]==2.63.0",
+    "asgi-correlation-id==5.0.1",
+    "orjson==3.11.9",
+    "python-multipart==0.0.32",
+    "tenacity==9.1.4",
+    "pybreaker==1.4.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.15.20",
+    "black==26.5.1",
+    "mypy==2.1.0",
+    "pre-commit==4.6.0",
+    "types-redis",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "C90", "N", "UP", "S", "ASYNC"]
+ignore = ["S101"]   # allow asserts in tests
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S"]   # tests pueden hacer cosas que en prod son S-warnings
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["alembic/versions/"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+[tool.uv]
+# DEVIATION (Phase 1, plan 01-01): arq 0.28.0 declares redis>=4.2.0,<6, but
+# CONTEXT.md D-05 pins redis==8.0.1 (the latest, async-first). Both are explicit
+# locked decisions. We override arq's redis ceiling so the lockfile honors the
+# CONTEXT.md pin verbatim. Runtime compatibility of arq with redis 8.x must be
+# validated in Phase 3 when the worker is actually wired (it currently has no
+# code). If runtime breakage appears, the architectural decision moves to:
+# either downgrade redis (violates D-05) or replace arq with a redis-8 native
+# queue (out of scope for F1 scaffold).
+override-dependencies = [
+    "redis==8.0.1",
+]
