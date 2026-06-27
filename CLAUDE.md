@@ -11,16 +11,16 @@ Para contexto profundo lee `.planning/PROJECT.md` y `.planning/ROADMAP.md`. Este
 ```bash
 # Setup
 cp .env.example .env  # Llenar credenciales antes de correr
-pip install -r requirements.txt
+uv sync --frozen
 
 # Dev local
-uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload
 
 # Tests
-pytest
+uv run pytest
 
 # Lint
-ruff check . && black --check .
+uv run ruff check . && uv run black --check .
 ```
 
 Variables de entorno críticas (ver `.env.example` para la lista completa):
