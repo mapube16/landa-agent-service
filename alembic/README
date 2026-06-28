@@ -1,0 +1,43 @@
+Async alembic environment for landa-agent-service.
+
+Quickstart
+----------
+- `uv run alembic upgrade head`  → applies all pending migrations.
+- `uv run alembic history`        → lists revisions.
+- `uv run alembic check`          → autogenerate dry-run (no DB writes).
+- `uv run alembic revision --autogenerate -m "<msg>"`  → new migration.
+
+How to register new app models
+------------------------------
+`env.py` imports `app.config.db.metadata` for autogenerate. When you add a
+SQLAlchemy model in (for example) `app.memory.case_store`, ALSO add an import
+of that module in `env.py` so its tables attach to `Base.metadata` before
+alembic captures `target_metadata`:
+
+    # In alembic/env.py, near the top:
+    from app.memory import case_store  # noqa: F401
+
+Without that import, autogenerate will not see the new tables.
+
+LangGraph checkpoint tables
+---------------------------
+Migration `0001_initial_schema` creates the four LangGraph tables
+(`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`,
+`checkpoint_migrations`) by delegating to `AsyncPostgresSaver.setup()` rather
+than hardcoded DDL. This keeps the schema synchronised with whichever version
+of `langgraph-checkpoint-postgres` is installed at deploy time. See the
+docstring of `versions/0001_initial_schema.py` for the full rationale.
+
+Threat model notes
+------------------
+- alembic.ini intentionally contains NO `sqlalchemy.url`. The URL is composed
+  from `app.config.settings.PostgresSettings` at runtime so credentials never
+  enter version control (T-01-11 mitigation, 01-03-PLAN.md).
+- All DDL must use `IF NOT EXISTS` / `IF EXISTS` for idempotency (T-01-13).
+- If `langgraph-checkpoint-postgres` is upgraded to a version that ships new
+  MIGRATIONS entries, the next `alembic upgrade head` is a no-op — but the
+  next call to `AsyncPostgresSaver.setup()` (at lifespan startup) will apply
+  the new entries because `setup()` walks the MIGRATIONS list and checks the
+  `checkpoint_migrations` table. This is intentional. Document major
+  upgrades by adding a new alembic revision that calls `setup()` again so
+  the alembic history reflects the change explicitly (T-01-14).
