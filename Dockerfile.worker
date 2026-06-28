@@ -9,8 +9,7 @@ ENV UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
 RUN pip install --no-cache-dir uv==0.4.30
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project
 
 FROM python:3.12-slim AS runtime
 WORKDIR /app
