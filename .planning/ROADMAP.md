@@ -259,4 +259,25 @@ Cada fase desbloquea la siguiente. Dentro de una fase, los planes pueden correr 
 
 ---
 
-*Last updated: 2026-06-27 — initial roadmap with 7 phases (F0-F6) for v1*
+## Backlog
+
+### Phase 999.1: Sentry → WhatsApp via Meta Cloud API self-hosted webhook (BACKLOG)
+
+**Goal:** [Captured for future planning]
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Construir endpoint `POST /alerts/sentry` en landa-agent-service que reciba webhooks de Sentry (issue created / regression / alert rule) y mande mensaje WhatsApp al número del operador de cartera usando el sender Meta Cloud API que ya existirá en Phase 2. Dogfooding del propio agente WhatsApp para alertas internas.
+
+**Requiere antes de planear:** integración WhatsApp en prod (post-Phase 2), allowlist de números autorizados a recibir alertas, HMAC verification del webhook Sentry, rate limiting para evitar storm.
+
+**Trigger natural:** cuando arranque Phase 3 o cuando Phase 2 esté smoke-tested en prod.
+
+**Estimación inicial:** 1-2 días una vez Phase 2 listo.
+
+Plans:
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+---
+
+*Last updated: 2026-06-28 — added backlog 999.1 (Sentry→WhatsApp self-hosted webhook)*
