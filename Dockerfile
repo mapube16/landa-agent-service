@@ -9,7 +9,7 @@ ENV UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
 RUN pip install --no-cache-dir uv==0.4.30
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
 FROM python:3.12-slim AS runtime
@@ -23,8 +23,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
 COPY app ./app
-# alembic/, alembic.ini and knowledge/ land in plan 01-03; copy them
-# defensively so the image is self-contained once they exist.
+COPY alembic ./alembic
+COPY alembic.ini ./
 COPY knowledge ./knowledge
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s \
