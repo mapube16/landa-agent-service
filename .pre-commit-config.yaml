@@ -27,6 +27,13 @@ repos:
           # AsyncPostgresSaver from langgraph-checkpoint-postgres. The
           # version pin matches CONTEXT.md D-03.
           - langgraph-checkpoint-postgres==3.1.0
+          # Plan 01-04 wires LLM factory + FastAPI app + /health.
+          # mypy isolated env needs the ChatOpenAI wrapper, FastAPI,
+          # httpx, asgi-correlation-id. Versions match pyproject.toml.
+          - langchain-openai==1.3.3
+          - fastapi==0.138.1
+          - httpx==0.28.1
+          - asgi-correlation-id==5.0.1
         args: [--strict, --explicit-package-bases]
         files: ^app/
   - repo: https://github.com/pre-commit/pre-commit-hooks
