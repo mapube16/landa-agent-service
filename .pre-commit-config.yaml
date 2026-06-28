@@ -23,6 +23,10 @@ repos:
           # pre-commit's isolated mypy env needs them for --strict to pass.
           - structlog==26.1.0
           - "sentry-sdk[fastapi]==2.63.0"
+          # Plan 01-03 adds app/config/checkpointer.py which imports
+          # AsyncPostgresSaver from langgraph-checkpoint-postgres. The
+          # version pin matches CONTEXT.md D-03.
+          - langgraph-checkpoint-postgres==3.1.0
         args: [--strict, --explicit-package-bases]
         files: ^app/
   - repo: https://github.com/pre-commit/pre-commit-hooks
