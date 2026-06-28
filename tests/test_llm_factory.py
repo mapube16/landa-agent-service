@@ -9,7 +9,7 @@ def test_get_llm_returns_chatopenai_for_conversation() -> None:
     from app.integrations.openrouter import get_llm
 
     llm = get_llm("conversation")
-    assert llm.model_name == "google/gemini-2.0-pro"
+    assert llm.model_name == "google/gemini-2.5-pro"
     assert "openrouter.ai" in str(llm.openai_api_base)
 
 

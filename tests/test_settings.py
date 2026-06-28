@@ -8,8 +8,8 @@ def test_settings_loads_with_minimum_env() -> None:
 
     s = Settings()
     assert s.app.env in ("dev", "staging", "prod")
-    assert s.llm.model_conversation == "google/gemini-2.0-pro"
-    assert s.llm.model_judge == "google/gemini-2.0-flash"
+    assert s.llm.model_conversation == "google/gemini-2.5-pro"
+    assert s.llm.model_judge == "google/gemini-2.5-flash"
     assert s.openrouter.base_url == "https://openrouter.ai/api/v1"
     # SecretStr must never render the raw value via str()
     assert "test-key" not in str(s.openrouter.api_key)

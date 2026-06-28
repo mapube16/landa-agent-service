@@ -88,10 +88,14 @@ class LLMSettings(BaseSettings):
         case_sensitive=False,
     )
 
-    model_conversation: str = "google/gemini-2.0-pro"
-    model_judge: str = "google/gemini-2.0-flash"
-    model_intent: str = "google/gemini-2.0-flash"
-    model_summarizer: str = "google/gemini-2.0-flash"
+    # Real OpenRouter slugs (verified against /api/v1/models 2026-06-28):
+    # the original `google/gemini-2.0-pro` from CLAUDE.md was speculative
+    # and OpenRouter rejects it with 400. Gemini 2.0 only ships Flash on
+    # OpenRouter; the production "pro" line is 2.5+. Plan 01-05 deviation.
+    model_conversation: str = "google/gemini-2.5-pro"
+    model_judge: str = "google/gemini-2.5-flash"
+    model_intent: str = "google/gemini-2.5-flash"
+    model_summarizer: str = "google/gemini-2.5-flash"
     # ``NoDecode`` keeps pydantic-settings from JSON-decoding the env-var so
     # the validator below can split a plain ``"a,b,c"`` CSV. Without it,
     # pydantic-settings would try ``json.loads("a,b,c")`` and crash.

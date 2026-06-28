@@ -80,8 +80,8 @@ app/
 | Runtime | Python 3.12 + FastAPI |
 | Orquestación agente | LangGraph + Postgres checkpointer |
 | Gateway LLM | **OpenRouter** (NO Anthropic SDK directo) |
-| Default conversation model | `google/gemini-2.0-pro` (cambiable por env var) |
-| Default judge model | `google/gemini-2.0-flash` (temp=0) |
+| Default conversation model | `google/gemini-2.5-pro` (cambiable por env var) |
+| Default judge model | `google/gemini-2.5-flash` (temp=0) |
 | WhatsApp | **Meta Cloud API directo** (NO Twilio) |
 | Inbox humanos | Chatwoot self-hosted en Railway, docker-compose |
 | DB | Postgres (checkpoints + audit log + cases) |
