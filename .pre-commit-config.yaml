@@ -34,6 +34,8 @@ repos:
           - fastapi==0.138.1
           - httpx==0.28.1
           - asgi-correlation-id==5.0.1
+          # Plan 01-05 wires ARQ worker REDIS_URL via RedisSettings.from_dsn.
+          - arq==0.28.0
         args: [--strict, --explicit-package-bases]
         files: ^app/
   - repo: https://github.com/pre-commit/pre-commit-hooks

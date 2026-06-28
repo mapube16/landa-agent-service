@@ -6,11 +6,20 @@ boots — ARQ refuses to start with an empty ``functions`` list
 (``RuntimeError: at least one function or cron_job must be registered``).
 Real jobs (WhatsApp send, SoftSeguros refresh, escalation cleanup) wire
 in from Phase 2 onward and the ``_noop`` placeholder gets dropped then.
+
+ARQ does NOT auto-read ``REDIS_URL`` — its ``RedisSettings`` default is
+``host='localhost'``. We construct ``RedisSettings`` from the DSN that
+``app.config.settings`` already validated, so the worker and the FastAPI
+app share the same Redis source-of-truth.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from arq.connections import RedisSettings
+
+from app.config.settings import settings
 
 
 async def _noop(ctx: dict[str, Any]) -> None:
@@ -31,5 +40,4 @@ class WorkerSettings:
     """
 
     functions: list[Any] = [_noop]
-    # ``redis_settings`` is read lazily by ARQ from REDIS_URL when not set
-    # here; settings module already injects REDIS_URL into the process env.
+    redis_settings: RedisSettings = RedisSettings.from_dsn(settings.redis.url.get_secret_value())
