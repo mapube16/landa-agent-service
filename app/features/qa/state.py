@@ -19,7 +19,7 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
 
-class QAState(TypedDict):
+class QAState(TypedDict, total=False):
     """Shared state for the 5-node Q&A LangGraph (D-04, 03-CONTEXT.md).
 
     Fields:
@@ -30,14 +30,21 @@ class QAState(TypedDict):
         cliente_doc: raw document string provided by the client (echo only,
             never passed to LLM after identification succeeds).
         polizas_list: transient list of poliza dicts fetched by ``node_identify``
-            for the ``awaiting_policy_choice`` disambiguation display. Cleared
-            after poliza is chosen.
+            for the ``awaiting_policy_choice`` disambiguation display.
         doc_retries: count of failed document lookups (max=1 per D-03). When
             this reaches 1, ``node_identify`` transitions to ``escalating``.
         judge_retries: count of LLM-as-judge rejections (max=1 per D-06). When
             this reaches 1, ``node_answer`` transitions to ``escalating``.
-        node: current node name used by conditional edges and for Chatwoot
-            mirror metadata. Value is always one of the 5 literal strings.
+        node: current node name used by conditional edges.
+        escalation_reason: why escalation was triggered (for logging/template
+            selection). One of 'doc_exhausted', 'breaker', 'judge_rejected',
+            'escape_hatch'.
+        last_rejection_rationale: judge rationale from last rejection (injected
+            into system prompt on retry per D-06).
+        force_escalate: set by webhook handler when Layer 1 regex escape hatch
+            fires (D-15) — node_answer checks this flag first.
+        wa_phone: WhatsApp phone number (E.164) for outbound dispatch. Set by
+            webhook handler when dispatching the graph.
     """
 
     messages: Annotated[list[BaseMessage], add_messages]
@@ -53,6 +60,10 @@ class QAState(TypedDict):
         "escalating",
         "closed",
     ]
+    escalation_reason: str | None
+    last_rejection_rationale: str | None
+    force_escalate: bool
+    wa_phone: str
 
 
 __all__ = ["QAState"]
