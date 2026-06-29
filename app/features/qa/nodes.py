@@ -81,6 +81,22 @@ def _build_policy_list(polizas: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _retry_or_escalate(doc_retries: int, text: str) -> dict[str, Any]:
+    """Return retry state or escalate after exhausting doc_retries (system errors only)."""
+    if doc_retries >= 1:
+        return {
+            "node": "escalating",
+            "escalation_reason": "doc_exhausted",
+            "messages": [AIMessage(content=T_03)],
+        }
+    return {
+        "node": "awaiting_identification",
+        "doc_retries": doc_retries + 1,
+        "cliente_doc": text,
+        "messages": [AIMessage(content=T_02)],
+    }
+
+
 # ---------------------------------------------------------------------------
 # node_identify
 # ---------------------------------------------------------------------------
@@ -110,19 +126,7 @@ async def node_identify(state: QAState) -> dict[str, Any]:
 
         if cliente_id is None:
             # Document not found (no cliente returned)
-            doc_retries = state.get("doc_retries", 0)
-            if doc_retries >= 1:
-                return {
-                    "node": "escalating",
-                    "escalation_reason": "doc_exhausted",
-                    "messages": [AIMessage(content=T_03)],
-                }
-            return {
-                "node": "awaiting_identification",
-                "doc_retries": doc_retries + 1,
-                "cliente_doc": text,
-                "messages": [AIMessage(content=T_02)],
-            }
+            return _retry_or_escalate(state.get("doc_retries", 0), text)
 
         # Step 2: get polizas for this cliente
         polizas: list[dict[str, Any]] = await client.get_polizas_by_cliente(cliente_id)
@@ -138,36 +142,31 @@ async def node_identify(state: QAState) -> dict[str, Any]:
         status = getattr(getattr(exc, "response", None), "status_code", None)
         body = getattr(getattr(exc, "response", None), "text", "")[:300]
         log.warning("node_identify.error", error_type=type(exc).__name__, status=status, body=body)
-        doc_retries = state.get("doc_retries", 0)
-        if doc_retries >= 1:
+
+        # 404 = documento no existe en SoftSeguros (user error, not system error).
+        # Ask to verify — no retry limit, just keep asking until they get it right.
+        if status == 404:
             return {
-                "node": "escalating",
-                "escalation_reason": "doc_exhausted",
-                "messages": [AIMessage(content=T_03)],
+                "node": "awaiting_identification",
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "No encontré ningún cliente con ese número de documento "
+                            "en el sistema de DPG. 🔍\n\n"
+                            "¿Podés verificar que el número esté correcto? "
+                            "Puede ser cédula de ciudadanía, NIT o cédula de extranjería."
+                        )
+                    )
+                ],
             }
-        return {
-            "node": "awaiting_identification",
-            "doc_retries": doc_retries + 1,
-            "cliente_doc": text,
-            "messages": [AIMessage(content=T_02)],
-        }
+
+        # Any other error (5xx, timeout, network) = system issue → escalate after 1 retry
+        return _retry_or_escalate(state.get("doc_retries", 0), text)
 
     n = len(polizas)
 
     if n == 0:
-        doc_retries = state.get("doc_retries", 0)
-        if doc_retries >= 1:
-            return {
-                "node": "escalating",
-                "escalation_reason": "doc_exhausted",
-                "messages": [AIMessage(content=T_03)],
-            }
-        return {
-            "node": "awaiting_identification",
-            "doc_retries": doc_retries + 1,
-            "cliente_doc": text,
-            "messages": [AIMessage(content=T_02)],
-        }
+        return _retry_or_escalate(state.get("doc_retries", 0), text)
 
     if n == 1:
         p = polizas[0]
