@@ -217,6 +217,11 @@ class ChatwootSettings(BaseSettings):
     api_key: SecretStr  # REQUIRED — user api_access_token from Chatwoot Profile
     account_id: int  # REQUIRED — visible in chat URL /app/accounts/N/...
     inbox_id: int  # REQUIRED — id of the API Channel inbox created in 03-00
+    # Inbox-level enable_auto_assignment does NOT fire for API-channel
+    # conversations, so we set assignee_id directly when this is configured.
+    # Without it, new conversations land in "Unassigned" and never show up in
+    # the agent's mobile app inbox.
+    default_assignee_id: int | None = None
 
 
 class SentrySettings(BaseSettings):

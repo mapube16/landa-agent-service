@@ -251,14 +251,23 @@ class ChatwootClient:
         return int(results[0]["id"])
 
     async def _create_conversation(self, contact_id: int, phone: str) -> int:
-        """POST /conversations to create a new conversation, return conv_id."""
+        """POST /conversations to create a new conversation, return conv_id.
+
+        Inbox-level ``enable_auto_assignment`` does not fire for API-channel
+        conversations created via this endpoint, so we include
+        ``assignee_id`` directly when ``CHATWOOT_DEFAULT_ASSIGNEE_ID`` is set.
+        Without an assignee the conversation lands in "Unassigned" and never
+        reaches the agent's mobile inbox.
+        """
         normalized = phone if phone.startswith("+") else f"+{phone}"
         path = f"/api/v1/accounts/{self._account_id}/conversations"
-        payload = {
+        payload: dict[str, Any] = {
             "inbox_id": settings.chatwoot.inbox_id,
             "contact_id": contact_id,
             "source_id": normalized,
         }
+        if settings.chatwoot.default_assignee_id is not None:
+            payload["assignee_id"] = settings.chatwoot.default_assignee_id
         r = await self._http.post(path, json=payload)
         r.raise_for_status()
         # Chatwoot Application API create-conversation response shape:
