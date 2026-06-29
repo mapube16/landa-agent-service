@@ -135,7 +135,9 @@ async def node_identify(state: QAState) -> dict[str, Any]:
             "messages": [AIMessage(content=T_06)],
         }
     except Exception as exc:  # noqa: BLE001
-        log.warning("node_identify.error", error_type=type(exc).__name__)
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        body = getattr(getattr(exc, "response", None), "text", "")[:300]
+        log.warning("node_identify.error", error_type=type(exc).__name__, status=status, body=body)
         doc_retries = state.get("doc_retries", 0)
         if doc_retries >= 1:
             return {
