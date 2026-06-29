@@ -112,6 +112,16 @@ Note: CONTEXT D-08 supersedes the Meta v18.0 wording above — the actual plans 
 
 **Out of scope this phase**: flujo de pago, escalación bidireccional (humano respondiendo desde Chatwoot), audit log inmutable con hash chain (logs simples OK por ahora), voice handoff.
 
+**Plans** (finalized 2026-06-28 — see `.planning/phases/03-bot-q-a-inbound-chatwoot-mirror/03-PLAN.md` for waves + dep graph):
+- [ ] `03-00-PLAN.md` — Wave 0 probe: `/api/cliente/listar_cliente_por_documento/` shape + Chatwoot setup + Gemini Flash structured output (operator-driven, hard blocker)
+- [ ] `03-01-PLAN.md` — Settings ChatwootSettings + ClienteRaw/EstadoCodigo/DTOs + QAState + module skeletons + KB stub + conftest + pre-commit (Wave 1)
+- [ ] `03-02-PLAN.md` — SoftSeguros `get_clientes_by_documento` + CI guard METHOD_ALLOWLIST update + tests (Wave 2)
+- [ ] `03-03-PLAN.md` — Chatwoot client + ARQ mirror jobs + factory + tests (Wave 2)
+- [ ] `03-04-PLAN.md` — prompt_firewall + judge + kb_auditor 5-layer + adversarial fixtures + CI workflow + tests (Wave 2)
+- [ ] `03-05-PLAN.md` — LangGraph 5-nodos + tools (InjectedState) + prompts + KB load + replace echo branch + lifespan blocks 6-9 + tests (Wave 3)
+- [ ] `03-06-PLAN.md` — E2E smoke verification operator-driven en Railway live (Wave 4)
+
+
 ---
 
 ## Phase 4: Flujo de validación de pago + Chatwoot escalación bidireccional
@@ -288,4 +298,4 @@ Plans:
 
 ---
 
-*Last updated: 2026-06-28 — Phase 2 planning finalized (4 plans, 3 waves) + backlog 999.1*
+*Last updated: 2026-06-29 — Phase 3 planning finalized (7 plans, 5 waves) + backlog 999.1*
