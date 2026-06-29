@@ -146,6 +146,55 @@ class LangSmithSettings(BaseSettings):
     project: str = "landa-agent-dev"
     tracing: bool = True
     endpoint: str = "https://api.smith.langchain.com"
+    # Optional — Railway sometimes exposes a workspace_id; harmless if absent.
+    # Captured here so future tracing-config code can read it without touching
+    # os.getenv (Phase 1 follow-up, RESEARCH Pitfall 9).
+    workspace_id: SecretStr | None = None
+
+
+class WhatsAppSettings(BaseSettings):
+    """Meta Cloud API credentials + echo allowlist (Phase 2, D-01/D-02/D-06/D-08/D-17)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="WA_",
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    token: SecretStr  # REQUIRED — Meta system user token
+    phone_id: str  # REQUIRED — WhatsApp business phone id
+    business_account_id: str | None = None  # informational only
+    webhook_secret: SecretStr  # REQUIRED — HMAC X-Hub-Signature-256 (D-16)
+    verify_token: SecretStr  # REQUIRED — GET challenge (D-17)
+    # CSV env var ``WA_ECHO_ALLOWLIST=+1...,+2...`` parsed by ``_split_csv``
+    # below (same trick as ``LLMSettings.fallbacks_conversation``).
+    echo_allowlist: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("echo_allowlist", mode="before")
+    @classmethod
+    def _split_csv(cls, v: object) -> object:
+        """Accept ``"a,b,c"`` env-var form and split into a list."""
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+
+class SoftSegurosSettings(BaseSettings):
+    """SoftSeguros REST API credentials (Phase 2, D-01/D-13)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="SOFTSEGUROS_",
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    base_url: str = "https://app.softseguros.com/"
+    username: SecretStr  # REQUIRED — credential to /api-token-auth/
+    password: SecretStr  # REQUIRED
 
 
 class SentrySettings(BaseSettings):
@@ -188,6 +237,8 @@ class Settings(BaseSettings):
     openrouter: OpenRouterSettings = Field(default_factory=OpenRouterSettings)
     langsmith: LangSmithSettings = Field(default_factory=LangSmithSettings)
     sentry: SentrySettings = Field(default_factory=SentrySettings)
+    whatsapp: WhatsAppSettings = Field(default_factory=WhatsAppSettings)
+    softseguros: SoftSegurosSettings = Field(default_factory=SoftSegurosSettings)
 
 
 # Singleton — fail-fast at import time if a REQUIRED env var is missing.
@@ -203,5 +254,7 @@ __all__ = [
     "RedisSettings",
     "SentrySettings",
     "Settings",
+    "SoftSegurosSettings",
+    "WhatsAppSettings",
     "settings",
 ]

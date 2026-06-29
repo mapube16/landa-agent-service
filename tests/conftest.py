@@ -21,7 +21,20 @@ def _test_env() -> None:
     # the /health env-presence probe.
     os.environ.setdefault("LANGSMITH_API_KEY", "ls-test-key")
     os.environ.setdefault("LANGSMITH_PROJECT", "landa-agent-test")
+    # LANGSMITH_WORKSPACE_ID intentionally unset -- default None is valid.
     # SENTRY_DSN intentionally unset -- init_sentry() no-ops when absent.
+    # Phase 2 placeholders so WhatsAppSettings + SoftSegurosSettings instancian
+    # clean en tests sin levantar ValidationError. Valores ficticios; ninguno
+    # se usa contra una API real -- los tests que tocan IO stubbean los clients.
+    os.environ.setdefault("WA_TOKEN", "wa-test-token")
+    os.environ.setdefault("WA_PHONE_ID", "1267241483129092")
+    os.environ.setdefault("WA_BUSINESS_ACCOUNT_ID", "1451322196454283")
+    os.environ.setdefault("WA_WEBHOOK_SECRET", "test-webhook-secret-do-not-use-in-prod")
+    os.environ.setdefault("WA_VERIFY_TOKEN", "test-verify-token-do-not-use-in-prod")
+    os.environ.setdefault("WA_ECHO_ALLOWLIST", "+15555550100,+15555550101")
+    os.environ.setdefault("SOFTSEGUROS_BASE_URL", "https://app.softseguros.com/")
+    os.environ.setdefault("SOFTSEGUROS_USERNAME", "test-user")
+    os.environ.setdefault("SOFTSEGUROS_PASSWORD", "test-pass")
 
 
 @pytest.fixture
