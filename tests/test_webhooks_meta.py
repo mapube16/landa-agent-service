@@ -1,0 +1,383 @@
+"""Tests for app.webhooks.meta — GET challenge + POST HMAC pipeline.
+
+Stubs ``app.state.meta`` (MetaCloudClient) and ``app.state.redis`` via
+``monkeypatch`` so no live infrastructure is required. The ``client``
+fixture from conftest does NOT start the FastAPI lifespan, which is what
+lets us inject pure mocks on ``app.state``.
+
+NOTE: ``app.*`` imports happen inside fixtures/tests so the autouse
+session ``_test_env`` fixture (conftest) populates env vars before any
+``Settings()`` instantiation.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from httpx import AsyncClient
+
+WEBHOOK_SECRET = "test-webhook-secret-do-not-use-in-prod"  # matches conftest placeholder
+VERIFY_TOKEN = "test-verify-token-do-not-use-in-prod"  # matches conftest placeholder
+
+
+def _sign(raw_body: bytes, secret: str = WEBHOOK_SECRET) -> str:
+    return "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+
+def _inbound_text_payload(
+    message_id: str = "wamid.test1",
+    from_: str = "15555550100",
+    text: str = "hola",
+) -> bytes:
+    """Minimal valid Meta inbound text webhook payload."""
+    return json.dumps(
+        {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "1451322196454283",
+                    "changes": [
+                        {
+                            "value": {
+                                "messaging_product": "whatsapp",
+                                "metadata": {
+                                    "display_phone_number": "16415416615",
+                                    "phone_number_id": "1267241483129092",
+                                },
+                                "messages": [
+                                    {
+                                        "from": from_,
+                                        "id": message_id,
+                                        "timestamp": "1749416383",
+                                        "type": "text",
+                                        "text": {"body": text},
+                                    }
+                                ],
+                            },
+                            "field": "messages",
+                        }
+                    ],
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
+def _inbound_image_payload(message_id: str = "wamid.img1", from_: str = "15555550100") -> bytes:
+    return json.dumps(
+        {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "x",
+                    "changes": [
+                        {
+                            "value": {
+                                "messaging_product": "whatsapp",
+                                "metadata": {},
+                                "messages": [
+                                    {
+                                        "from": from_,
+                                        "id": message_id,
+                                        "timestamp": "1",
+                                        "type": "image",
+                                    }
+                                ],
+                            },
+                            "field": "messages",
+                        }
+                    ],
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
+def _inbound_status_payload() -> bytes:
+    return json.dumps(
+        {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "x",
+                    "changes": [
+                        {
+                            "value": {
+                                "messaging_product": "whatsapp",
+                                "metadata": {},
+                                "statuses": [
+                                    {
+                                        "id": "wamid.s1",
+                                        "status": "delivered",
+                                        "timestamp": "1",
+                                        "recipient_id": "15555550100",
+                                    }
+                                ],
+                            },
+                            "field": "messages",
+                        }
+                    ],
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
+def _inbound_unsupported_payload(
+    message_id: str = "wamid.unsup1", from_: str = "15555550100"
+) -> bytes:
+    return json.dumps(
+        {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "x",
+                    "changes": [
+                        {
+                            "value": {
+                                "messaging_product": "whatsapp",
+                                "metadata": {},
+                                "messages": [
+                                    {
+                                        "from": from_,
+                                        "id": message_id,
+                                        "timestamp": "1",
+                                        "type": "interactive",
+                                    }
+                                ],
+                            },
+                            "field": "messages",
+                        }
+                    ],
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
+@pytest.fixture
+def stub_app_state(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock]:
+    """Inject mock meta + redis onto app.state; auto-cleanup via monkeypatch."""
+    from app.main import app as fastapi_app
+
+    meta_mock = MagicMock()
+    meta_mock.send_text = AsyncMock(return_value="wamid.outbound")
+    meta_mock.send_media_ack = AsyncMock(return_value="wamid.outbound.media")
+
+    redis_mock = MagicMock()
+    redis_mock.set = AsyncMock(return_value=True)  # default: first-see
+
+    monkeypatch.setattr(fastapi_app.state, "meta", meta_mock, raising=False)
+    monkeypatch.setattr(fastapi_app.state, "redis", redis_mock, raising=False)
+    return meta_mock, redis_mock
+
+
+# ---------------------------------------------------------------------------
+# GET challenge
+# ---------------------------------------------------------------------------
+
+
+async def test_get_challenge_returns_challenge_when_verify_token_matches(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    r = await client.get(
+        f"/webhooks/meta?hub.mode=subscribe&hub.verify_token={VERIFY_TOKEN}&hub.challenge=CHALLENGE123"
+    )
+    assert r.status_code == 200
+    assert r.text == "CHALLENGE123"
+
+
+async def test_get_challenge_returns_403_when_verify_token_mismatches(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    r = await client.get("/webhooks/meta?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=X")
+    assert r.status_code == 403
+
+
+async def test_get_challenge_returns_403_when_mode_not_subscribe(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    r = await client.get(
+        f"/webhooks/meta?hub.mode=unsubscribe&hub.verify_token={VERIFY_TOKEN}&hub.challenge=X"
+    )
+    assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST — HMAC + dispatch
+# ---------------------------------------------------------------------------
+
+
+async def test_post_valid_hmac_text_message_triggers_echo(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, redis_mock = stub_app_state
+    body = _inbound_text_payload(text="hola")
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    meta_mock.send_text.assert_awaited_once_with(to="15555550100", body="echo: hola")
+    # Redis dedup gate called with binary-safe key + value
+    redis_mock.set.assert_awaited_once()
+    set_args, set_kwargs = redis_mock.set.call_args
+    assert set_args[0] == b"wa:msg:wamid.test1"
+    assert set_args[1] == b"1"
+    assert set_kwargs == {"nx": True, "ex": 86400}
+
+
+async def test_post_invalid_hmac_returns_401(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, _ = stub_app_state
+    body = _inbound_text_payload()
+    bad_sig = "sha256=" + "0" * 64
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": bad_sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 401
+    meta_mock.send_text.assert_not_called()
+
+
+async def test_post_missing_signature_header_returns_401(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, _ = stub_app_state
+    body = _inbound_text_payload()
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 401
+    meta_mock.send_text.assert_not_called()
+
+
+async def test_post_duplicate_message_id_skips_echo(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, redis_mock = stub_app_state
+    # First request: redis returns True (first see), second returns None (dup).
+    redis_mock.set = AsyncMock(side_effect=[True, None])
+    body = _inbound_text_payload(message_id="wamid.dup")
+    sig = _sign(body)
+    headers = {"X-Hub-Signature-256": sig, "Content-Type": "application/json"}
+
+    r1 = await client.post("/webhooks/meta", content=body, headers=headers)
+    r2 = await client.post("/webhooks/meta", content=body, headers=headers)
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    # Exactly one echo even though webhook was delivered twice.
+    assert meta_mock.send_text.await_count == 1
+
+
+async def test_post_non_allowlisted_sender_skips_echo(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, redis_mock = stub_app_state
+    body = _inbound_text_payload(from_="19999999999")  # NOT in WA_ECHO_ALLOWLIST
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    meta_mock.send_text.assert_not_called()
+    # Dedup gate still runs (D-15 order: dedup happens before allowlist).
+    redis_mock.set.assert_awaited_once()
+
+
+async def test_post_image_message_triggers_send_media_ack(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, _ = stub_app_state
+    body = _inbound_image_payload()
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    meta_mock.send_media_ack.assert_awaited_once_with(to="15555550100", media_type="image")
+    meta_mock.send_text.assert_not_called()
+
+
+async def test_post_status_update_acknowledged_without_dispatch(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, redis_mock = stub_app_state
+    body = _inbound_status_payload()
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    meta_mock.send_text.assert_not_called()
+    meta_mock.send_media_ack.assert_not_called()
+    # No message_id on statuses path -> no dedup write.
+    redis_mock.set.assert_not_called()
+
+
+async def test_post_malformed_json_returns_200_not_422(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, _ = stub_app_state
+    # Valid JSON object but wrong shape (entry must be a list of Entry).
+    body = b'{"object":"whatsapp_business_account","entry":"BROKEN"}'
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    # Meta retries 5xx for 24h; malformed payload won't be fixed by retry,
+    # so we acknowledge to stop the retry loop (RESEARCH Pitfall 7).
+    assert r.status_code == 200
+    meta_mock.send_text.assert_not_called()
+
+
+async def test_post_e164_normalization_meta_no_plus_matches_allowlist_with_plus(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, _ = stub_app_state
+    # Meta delivers `from` without '+'; conftest allowlist stores '+15555550100'.
+    body = _inbound_text_payload(from_="15555550100", text="hi")
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    # Normalisation worked -> echo dispatched.
+    meta_mock.send_text.assert_awaited_once()
+
+
+async def test_post_unsupported_type_logged_and_skipped(
+    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+) -> None:
+    meta_mock, _ = stub_app_state
+    body = _inbound_unsupported_payload()  # type=interactive
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    meta_mock.send_text.assert_not_called()
+    meta_mock.send_media_ack.assert_not_called()
