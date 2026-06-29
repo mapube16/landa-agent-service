@@ -64,6 +64,7 @@ class QAState(TypedDict, total=False):
     last_rejection_rationale: str | None
     force_escalate: bool
     wa_phone: str
+    asked_for_doc: bool  # True after T-01 emitted; prevents SoftSeguros call on greeting
 
 
 __all__ = ["QAState"]

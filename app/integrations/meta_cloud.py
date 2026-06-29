@@ -62,6 +62,13 @@ class MetaCloudClient:
         """
         payload = OutboundText(to=to, text=OutboundTextBody(body=body)).model_dump(mode="json")
         r = await self._http.post(f"/{self._phone_id}/messages", json=payload)
+        if not r.is_success:
+            log.error(
+                "meta.send_text.failed",
+                status=r.status_code,
+                body=r.text[:500],  # ponytail: 500 chars enough to diagnose, no PII in error body
+                phone_id=self._phone_id,
+            )
         r.raise_for_status()
         data = r.json()
         # Meta success response shape (RESEARCH "Code Examples — Success response"):

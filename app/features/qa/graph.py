@@ -53,7 +53,7 @@ def build_qa_graph() -> StateGraph:  # type: ignore[type-arg]
             "awaiting_policy_choice": "awaiting_policy_choice",
             "answering_qa": "answering_qa",
             "escalating": "escalating",
-            "awaiting_identification": "awaiting_identification",
+            END: END,  # ponytail: wait for next user message instead of looping
         },
     )
     builder.add_conditional_edges(

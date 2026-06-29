@@ -27,6 +27,7 @@ def _make_state(**overrides: Any) -> dict[str, Any]:
         "escalation_reason": None,
         "last_rejection_rationale": None,
         "force_escalate": False,
+        "asked_for_doc": True,  # tests skip the greeting turn; set False to test T-01 path
     }
     base.update(overrides)
     return base
@@ -41,7 +42,7 @@ def _make_state(**overrides: Any) -> dict[str, Any]:
 async def test_node_identify_empty_message_returns_greeting() -> None:
     from app.features.qa.nodes import node_identify
 
-    state = _make_state(messages=[])
+    state = _make_state(messages=[], asked_for_doc=False)
     result = await node_identify(state)  # type: ignore[arg-type]
     assert result["node"] == "awaiting_identification"
     msgs = result["messages"]

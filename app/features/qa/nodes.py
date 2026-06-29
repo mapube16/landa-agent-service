@@ -94,10 +94,11 @@ async def node_identify(state: QAState) -> dict[str, Any]:
     """
     text = _last_human_text(state)
 
-    # No message yet → emit greeting
-    if not text:
+    # First contact or no document requested yet → emit T-01 and wait
+    if not state.get("asked_for_doc"):
         return {
             "node": "awaiting_identification",
+            "asked_for_doc": True,
             "messages": [AIMessage(content=T_01)],
         }
 
@@ -198,9 +199,19 @@ async def node_identify(state: QAState) -> dict[str, Any]:
 
 def route_from_identification(
     state: QAState,
-) -> Literal["awaiting_policy_choice", "answering_qa", "escalating", "awaiting_identification"]:
-    """Conditional edge after node_identify — reads state.node set by the node."""
-    return state.get("node", "awaiting_identification")  # type: ignore[return-value]
+) -> Literal["awaiting_policy_choice", "answering_qa", "escalating"] | str:
+    """Conditional edge after node_identify — reads state.node set by the node.
+
+    Returns END (via the string sentinel) when node_identify wants to wait for
+    the next user message (T-01 or T-02 emitted). This stops the graph from
+    looping back into node_identify within the same invocation.
+    """
+    from langgraph.graph import END
+
+    n = state.get("node", "awaiting_identification")
+    if n == "awaiting_identification":
+        return END
+    return n
 
 
 # ---------------------------------------------------------------------------
