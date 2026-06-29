@@ -35,6 +35,12 @@ def _test_env() -> None:
     os.environ.setdefault("SOFTSEGUROS_BASE_URL", "https://app.softseguros.com/")
     os.environ.setdefault("SOFTSEGUROS_USERNAME", "test-user")
     os.environ.setdefault("SOFTSEGUROS_PASSWORD", "test-pass")
+    # Phase 3 placeholders so ChatwootSettings instantiates clean in tests.
+    # Values are dummy; tests that touch Chatwoot IO stub the client.
+    os.environ.setdefault("CHATWOOT_URL", "https://chat-test.example.com")
+    os.environ.setdefault("CHATWOOT_API_KEY", "cw-test-key")
+    os.environ.setdefault("CHATWOOT_ACCOUNT_ID", "1")
+    os.environ.setdefault("CHATWOOT_INBOX_ID", "2")
 
 
 @pytest.fixture

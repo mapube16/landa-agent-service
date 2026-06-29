@@ -197,6 +197,28 @@ class SoftSegurosSettings(BaseSettings):
     password: SecretStr  # REQUIRED
 
 
+class ChatwootSettings(BaseSettings):
+    """Chatwoot self-hosted inbox credentials (Phase 3, D-Claude-Discretion).
+
+    Inbox is an "API Channel" type (confirmed in 03-00 probe, Task 2).
+    Separate from the WhatsApp native inbox wired in F4.
+    ``api_key`` is a Chatwoot user-level ``api_access_token`` (from Profile Settings),
+    rendered ``**********`` in all repr/log output (SecretStr rule, CLAUDE.md).
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="CHATWOOT_",
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    url: str = "https://chat.landatech.org"  # operator may override via CHATWOOT_URL
+    api_key: SecretStr  # REQUIRED — user api_access_token from Chatwoot Profile
+    account_id: int  # REQUIRED — visible in chat URL /app/accounts/N/...
+    inbox_id: int  # REQUIRED — id of the API Channel inbox created in 03-00
+
+
 class SentrySettings(BaseSettings):
     """Sentry error reporting. ``dsn=None`` disables Sentry (tests, CI without DSN)."""
 
@@ -239,6 +261,7 @@ class Settings(BaseSettings):
     sentry: SentrySettings = Field(default_factory=SentrySettings)
     whatsapp: WhatsAppSettings = Field(default_factory=WhatsAppSettings)
     softseguros: SoftSegurosSettings = Field(default_factory=SoftSegurosSettings)
+    chatwoot: ChatwootSettings = Field(default_factory=ChatwootSettings)
 
 
 # Singleton — fail-fast at import time if a REQUIRED env var is missing.
@@ -247,6 +270,7 @@ settings = Settings()
 
 __all__ = [
     "AppSettings",
+    "ChatwootSettings",
     "LLMSettings",
     "LangSmithSettings",
     "OpenRouterSettings",
