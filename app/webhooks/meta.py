@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import re
 from typing import Any
 
 import structlog
@@ -55,6 +56,13 @@ from app.features.qa.messages import ESCAPE_REGEX, T_06
 from app.integrations.meta_cloud import _hash_phone
 from app.models.meta import InboundEnvelope, InboundMessage
 from app.security.prompt_firewall import sanitize
+
+# Explicit user reset commands — wipe the checkpoint so the user can recover
+# from a stuck conversation (e.g. stale ``awaiting_policy_choice`` state).
+_RESET_RE = re.compile(
+    r"^\s*(hola|reiniciar|reinicio|menu|men[uú]|empezar|inicio|nuevo|salir)\s*\W*\s*$",
+    re.IGNORECASE,
+)
 
 router = APIRouter(prefix="/webhooks", tags=["meta"])
 log = structlog.get_logger("webhooks.meta")
@@ -242,6 +250,18 @@ async def _reset_if_closed(app_state: Any, thread_id: str) -> None:
         log.warning("webhook.checkpoint.read_failed", error_type=type(exc).__name__)
 
 
+async def _force_reset(app_state: Any, thread_id: str) -> None:
+    """Delete the checkpoint unconditionally — used for explicit reset commands."""
+    checkpointer = getattr(app_state, "checkpointer", None)
+    if checkpointer is None or not hasattr(checkpointer, "adelete_thread"):
+        return
+    try:
+        await checkpointer.adelete_thread(thread_id)
+        log.info("webhook.checkpoint.force_reset", thread_hash=_hash_phone(thread_id))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("webhook.checkpoint.force_reset_failed", error_type=type(exc).__name__)
+
+
 async def _send_searching_ack(*, app_state: Any, thread_id: str, phone: str, meta: Any) -> None:
     """Send a brief 'searching' text when the thread is awaiting document input.
 
@@ -293,7 +313,10 @@ async def _handle_text_message(
     # Step 3: Build thread_id (E.164 normalized phone) + reset if closed.
     thread_id = _normalize_e164(msg.from_)
     app_state = request.app.state
-    await _reset_if_closed(app_state, thread_id)
+    if _RESET_RE.match(raw_text):
+        await _force_reset(app_state, thread_id)
+    else:
+        await _reset_if_closed(app_state, thread_id)
 
     # Step 3b: If the thread is awaiting a document, send a "searching" ack
     # immediately so the user sees activity while SoftSeguros is queried.
