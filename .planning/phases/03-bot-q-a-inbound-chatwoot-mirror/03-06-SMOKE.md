@@ -267,3 +267,42 @@ lifespan.startup.complete blocks=1-9 kb_auditor.score=<N<50>
 **Criterio de cierre de F3:** Smokes 1-6 en PASS → Plan 03-06 completo → Phase 03 done.
 
 Si CUALQUIERA de Smokes 1-6 falla: reportar `## F3 SMOKE FAILED` y abrir gap closure antes de marcar la fase completa.
+
+---
+
+## Live Smoke Findings (2026-06-29)
+
+Bugs cazados durante el smoke en producción contra WhatsApp + DPG SoftSeguros. Todos arreglados sobre `main`.
+
+| # | Bug | Síntoma | Root cause | Fix commit |
+|---|---|---|---|---|
+| 1 | `node_identify` greeting loop | "hola" disparaba lookup SoftSeguros con texto basura → escalaba al segundo intento | Falta de `asked_for_doc` flag para distinguir saludo inicial de respuesta con documento | `c1f2904` |
+| 2 | Checkpoint persiste en terminal `escalating` | Tras escalar, el siguiente mensaje del cliente entraba en estado sucio | `_reset_if_closed` solo limpiaba `node="closed"` | `d92e63c` |
+| 3 | `WA_TOKEN` opaco al fallar | 401 OAuthException sin body en logs | `send_text.failed` solo logueaba status | `c1f2904` |
+| 4 | 404 SoftSeguros tratado como error sistémico | Documento inexistente escalaba como si fuera 5xx | No se distinguía 404 (user error) de 5xx (system error) en el except | `2255f31` |
+| 5 | Sin ack durante lookup | Usuario esperaba 2-3s sin feedback tras enviar documento | No había `meta.send_text` previo al SoftSeguros call | `3b55da5` |
+| 6 | Graph encadenaba `node_answer` tras `node_identify` (N=1) | LLM intentaba "responder" al número de documento | `route_from_identification` no cortaba el turno; no había conditional entry point | `59a6de4` |
+| 7 | Stuck en `awaiting_policy_choice` con `polizas_list` cacheado | Cualquier mensaje del cliente devolvía "No entendí bien" | Sin comando explícito de reset; checkpoint sólo se limpiaba en terminal | `4c3f544` |
+| 8 | `route_from_answering` chaining después de judge approved | Una respuesta aprobada volvía a invocar el LLM hasta que el judge rechazaba | Routing devolvía `"answering_qa"` incluso después de approval | `cea4802` |
+| 9 | `_extract_outbound` devolvía HumanMessage | Bot hacía echo del texto del usuario tras escalar | Fallback genérico aceptaba cualquier mensaje con contenido | `b201191` |
+| 10 | `_extract_outbound` devolvía AIMessage de turno previo con `send_to_client` | Tras escalar, mandaba la respuesta vieja en lugar de T_07 | Búsqueda preferencial por tag iteraba todo el historial, no solo el turno actual | `4d11152` |
+| 11 | `get_estado` golpeaba endpoint inexistente | Crash con `HTTPStatusError 404` en `/api/estadopoliza/{id}/` | El detail endpoint nunca existió (documentado en `SOFTSEGUROS_API_NOTES.md`) — estado vive embebido en `poliza` | `9a36f4f` |
+| 12 | Judge marcaba `no_pii_leak=false` para datos propios | Cliente preguntaba "saldo" → judge lo veía como leak → escalaba | Prompt del judge no especificaba que datos de la póliza activa están autorizados | `4d11152` |
+| 13 | **Worker corriendo código de Phase 1** | Todos los `mirror_inbound`/`mirror_outbound` jobs fallaban con `function 'X' not found` durante TODA la fase 03 | `agent-worker` service en Railway no estaba configurado para auto-deploy desde GitHub; quedó pegado en la imagen del commit `e0738ea` (Phase 1) | `railway up` manual + `8db2ef7` (startup log) |
+
+**Lecciones operacionales:**
+
+- **Worker auto-deploy:** `agent-worker` no se redeploya con `git push`. Hay que correr `railway up --service agent-worker --ci --detach` después de cualquier cambio en `app/worker.py`, `app/integrations/chatwoot.py`, o dependencias del worker. **TODO:** configurar GitHub deploy trigger en Railway settings para evitar tener que hacerlo manual.
+- **Token Meta:** el WA_TOKEN inicial era temporal (24h). Hay que generar un **System User Token permanente** desde Meta Business Suite → Configuración del negocio → Usuarios del sistema → Generar token. Permisos: `whatsapp_business_messaging` + `whatsapp_business_management`. Caducidad: "Nunca".
+- **Graph routing:** todo nodo no-terminal que emite un mensaje al cliente debe terminar el turno (END). Encadenar nodos en la misma invocación inevitablemente termina con el LLM respondiendo al mensaje equivocado o el judge rechazando una respuesta inocua del turno previo.
+- **Diagnóstico de judge:** flag `JUDGE_DEBUG_RATIONALE=1` en env activa el log del rationale completo. Off en prod (PII concern), on cuando hace falta calibrar.
+
+**Status post-fixes (2026-06-29 tarde):**
+Flujo end-to-end estable:
+- Identificación + selección de póliza ✅
+- Q&A con tools (`saldo`, `estado`, `coberturas`) ✅
+- Out-of-scope ("qué tiempo hace") rechazado elegante ✅
+- Context awareness ("cuándo vence esa póliza") ✅
+- Escape hatch ("hablar con humano") → T_08 ✅
+- Reset commands (hola/reiniciar/menu) limpian thread ✅
+- Worker procesando jobs Chatwoot ✅ (validación pendiente con mensaje real)
