@@ -49,8 +49,10 @@ log = structlog.get_logger("main")
 
 # noqa: E402 — intentional: these imports must come AFTER logging/Sentry init.
 from app.healthcheck import router as health_router  # noqa: E402
+from app.integrations.meta_cloud import get_meta_client  # noqa: E402
 from app.integrations.openrouter import get_llm  # noqa: E402
 from app.integrations.softseguros import get_softseguros_client  # noqa: E402
+from app.webhooks.meta import router as meta_router  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -80,6 +82,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # setup() creates LangGraph checkpoint tables if not already present.
     # Idempotent — safe to call after alembic migration has already run.
     await app.state.checkpointer.setup()
+
+    # 4. Meta Cloud API client (httpx singleton — NOT async-resource-heavy,
+    #    no __aenter__/__aexit__ needed per PATTERNS.md Pitfall 1).
+    app.state.meta = get_meta_client()
 
     # 5. SoftSeguros client (httpx singleton; factory leaves redis=None,
     #    we late-bind it from app.state.redis here so the cache layer is
@@ -152,6 +158,7 @@ async def bind_correlation_to_structlog(request: Request, call_next: Any) -> Any
 # ---------------------------------------------------------------------------
 
 app.include_router(health_router)
+app.include_router(meta_router)
 
 
 @app.post("/test/llm")
