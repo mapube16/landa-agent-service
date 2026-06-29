@@ -1,5 +1,9 @@
 """LLM-as-judge for outbound message validation (Phase 3, D-05/D-06/D-07).
 
+Set ``JUDGE_DEBUG_RATIONALE=1`` in the environment to log the raw judge
+rationale alongside the rubric. Off by default (PII leak vector per Pitfall 5);
+use ONLY in dev while calibrating judge strictness.
+
 Every outbound message from the conversation LLM passes through
 ``judge_response`` before being sent to the client. ``JudgeRubric`` defines
 the 8-flag schema (D-05) -- ALL flags must be ``True`` for the message to be
@@ -18,6 +22,7 @@ schema migration (D-05 rationale in 03-CONTEXT.md).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import structlog
@@ -135,12 +140,20 @@ async def judge_response(
         log.warning("judge.parse_failed", reason="rubric_is_none")
         return None
 
-    log.info(
-        "judge.rubric.scored",
-        is_in_scope=rubric.is_in_scope,
-        leaks_other=rubric.leaks_other_polizas,
-        approved=is_approved(rubric),
+    log_payload: dict[str, Any] = {
+        "is_in_scope": rubric.is_in_scope,
+        "leaks_other": rubric.leaks_other_polizas,
+        "affirms_payment": rubric.affirms_payment_without_cartera_approval,
+        "factually_grounded": rubric.factually_grounded,
+        "no_jailbreak_echo": rubric.no_jailbreak_echo,
+        "no_pii_leak": rubric.no_pii_leak,
+        "no_external_links": rubric.no_external_links,
+        "sentiment_appropriate": rubric.sentiment_appropriate,
+        "approved": is_approved(rubric),
         # ponytail: log rationale_len only -- raw rationale is a PII leak vector (Pitfall 5)
-        rationale_len=len(rubric.rationale),
-    )
+        "rationale_len": len(rubric.rationale),
+    }
+    if os.getenv("JUDGE_DEBUG_RATIONALE") == "1":
+        log_payload["rationale"] = rubric.rationale[:400]
+    log.info("judge.rubric.scored", **log_payload)
     return rubric
