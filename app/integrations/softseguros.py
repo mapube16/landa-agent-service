@@ -246,8 +246,14 @@ class SoftSegurosClient:
         return await self._cached_get(cliente_id, "cliente", f"/api/cliente/{cliente_id}/")
 
     async def get_estado(self, poliza_id: str) -> PolizaRaw:
-        """GET ``/api/estadopoliza/{poliza_id}/``."""
-        return await self._cached_get(poliza_id, "estado", f"/api/estadopoliza/{poliza_id}/")
+        """DEPRECATED: ``/api/estadopoliza/{id}/`` returns 404 in SoftSeguros.
+
+        SOFTSEGUROS_API_NOTES.md confirms the detail endpoint does NOT exist.
+        Read the embedded ``estado_poliza_nombre`` / ``estado_poliza_codigo``
+        from :meth:`get_poliza` instead. Kept as a thin alias for backwards
+        compatibility — callers should migrate to ``get_poliza`` directly.
+        """
+        return await self.get_poliza(poliza_id)
 
     async def get_pagos(self, poliza_id: str) -> PolizaRaw:
         """GET ``/api/pagopoliza/?poliza_id={poliza_id}``.

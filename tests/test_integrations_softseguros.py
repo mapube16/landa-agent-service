@@ -281,7 +281,9 @@ async def test_401_triggers_refresh_and_retry_once(
     [
         ("get_poliza", "123", "/api/poliza/123/", {}),
         ("get_cliente", "456", "/api/cliente/456/", {}),
-        ("get_estado", "123", "/api/estadopoliza/123/", {}),
+        # get_estado now aliases get_poliza — /api/estadopoliza/{id}/ returns 404,
+        # estado lives embedded in the poliza object (SOFTSEGUROS_API_NOTES.md).
+        ("get_estado", "123", "/api/poliza/123/", {}),
         ("get_pagos", "123", "/api/pagopoliza/", {"poliza_id": "123"}),
     ],
 )

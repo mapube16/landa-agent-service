@@ -119,9 +119,14 @@ async def get_estado(
     """Consulta el estado y fechas de vigencia de la póliza activa.
 
     No requiere argumentos — la póliza viene del estado de la conversación.
+
+    Nota: ``/api/estadopoliza/{id}/`` devuelve 404 (documentado en
+    SOFTSEGUROS_API_NOTES.md). El estado vive embebido en el objeto poliza
+    como ``estado_poliza_nombre`` + ``estado_poliza_codigo``, así que leemos
+    desde ``get_poliza`` (mismo endpoint que ``get_saldo``/``get_coberturas``).
     """
     client = get_softseguros_client()
-    raw = await client.get_estado(poliza_id)
+    raw = await client.get_poliza(poliza_id)
     payload = {
         "estado_poliza_nombre": raw.get("estado_poliza_nombre"),
         "fecha_inicio": raw.get("fecha_inicio"),
