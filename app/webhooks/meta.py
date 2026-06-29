@@ -92,12 +92,27 @@ def _log_task_error(task: asyncio.Task[Any]) -> None:
 
 
 def _extract_outbound(final_state: dict[str, Any]) -> str | None:
-    """Extract last sendable message content from graph final state."""
-    for msg in reversed(final_state.get("messages", [])):
-        if hasattr(msg, "additional_kwargs") and msg.additional_kwargs.get("send_to_client"):
+    """Extract the message that should be sent to the client.
+
+    Preference order:
+    1. The most recent AIMessage tagged ``send_to_client=True`` (judge-approved
+       conversation responses).
+    2. The most recent AIMessage without the tag (template messages like T-02,
+       T-03, T-06, T-07, T-08, the policy list, the identification ack).
+
+    HumanMessages are never returned — that's the user's own text.
+    """
+    from langchain_core.messages import AIMessage
+
+    messages = final_state.get("messages", [])
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.additional_kwargs.get("send_to_client"):
             return str(msg.content)
-        if hasattr(msg, "content") and isinstance(msg.content, str) and msg.content.strip():
-            return msg.content
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            content = str(msg.content)
+            if content.strip():
+                return content
     return None
 
 
