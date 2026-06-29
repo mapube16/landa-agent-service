@@ -1,4 +1,4 @@
-"""Meta Cloud API webhook receiver — implemented in Plan 02-02.
+"""Meta Cloud API webhook receiver — implemented in Plan 02-02, extended Plan 03-05.
 
 Endpoints (D-09):
 
@@ -10,7 +10,7 @@ Endpoints (D-09):
 
 **INVARIANT — D-15 message processing order:**
 
-    HMAC -> parse -> dedup -> allowlist -> echo
+    HMAC -> parse -> dedup -> allowlist -> firewall -> graph dispatch
 
 This order is **not negotiable**. Reordering breaks the threat model:
 
@@ -22,8 +22,10 @@ This order is **not negotiable**. Reordering breaks the threat model:
   3. Dedup before allowlist means a replayed message is rejected even
      for non-allowlisted senders, preventing a malicious replay from
      toggling rate-limit budgets repeatedly (T-02-06).
-  4. Allowlist before echo prevents outbound leakage to unknown
+  4. Allowlist before firewall prevents outbound leakage to unknown
      numbers (T-02-07).
+  5. Firewall before graph dispatch: injected payload never reaches LLM
+     (T-LLM01).
 
 **NEVER read ``request.json()`` before ``await request.body()``** — the
 body can only be consumed once and HMAC must be computed over the raw
@@ -36,6 +38,7 @@ prefix length via timing (T-02-05).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 from typing import Any
@@ -43,15 +46,24 @@ from typing import Any
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
+from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
 from app.config.settings import settings
-from app.features.handoff.echo import format_echo, is_echo_allowed
+from app.features.handoff.echo import is_echo_allowed
+from app.features.qa.messages import ESCAPE_REGEX, T_06
 from app.integrations.meta_cloud import _hash_phone
 from app.models.meta import InboundEnvelope, InboundMessage
+from app.security.prompt_firewall import sanitize
 
 router = APIRouter(prefix="/webhooks", tags=["meta"])
 log = structlog.get_logger("webhooks.meta")
+
+
+def _normalize_e164(raw: str) -> str:
+    """Return ``raw`` always prefixed with ``'+'``. Idempotent."""
+    raw = raw.strip()
+    return raw if raw.startswith("+") else "+" + raw
 
 
 def _verify_signature(raw_body: bytes, header_value: str, secret: str) -> bool:
@@ -63,6 +75,76 @@ def _verify_signature(raw_body: bytes, header_value: str, secret: str) -> bool:
     """
     expected = "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header_value)
+
+
+def _log_task_error(task: asyncio.Task[Any]) -> None:
+    """Callback for asyncio.create_task — logs exception WITHOUT exc.args (RESEARCH Pitfall 1)."""
+    if exc := task.exception():
+        log.error("qa_graph.task.error", error_type=type(exc).__name__)
+
+
+def _extract_outbound(final_state: dict[str, Any]) -> str | None:
+    """Extract last sendable message content from graph final state."""
+    for msg in reversed(final_state.get("messages", [])):
+        if hasattr(msg, "additional_kwargs") and msg.additional_kwargs.get("send_to_client"):
+            return str(msg.content)
+        if hasattr(msg, "content") and isinstance(msg.content, str) and msg.content.strip():
+            return msg.content
+    return None
+
+
+async def _send_outbound(app_state: Any, phone: str, outbound: str, wamid: str) -> None:
+    """Send outbound message via meta + enqueue mirror job."""
+    if not hasattr(app_state, "meta"):
+        return
+    try:
+        await app_state.meta.send_text(to=phone, body=outbound)
+    except Exception as exc:  # noqa: BLE001
+        log.error("qa_graph.outbound.send_failed", error_type=type(exc).__name__)
+    if hasattr(app_state, "arq") and app_state.arq is not None:
+        try:
+            await app_state.arq.enqueue_job(
+                "mirror_outbound", phone=phone, text=outbound, wamid=wamid + ":out"
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("qa_graph.mirror_outbound.failed", error_type=type(exc).__name__)
+
+
+async def _run_and_dispatch(
+    *,
+    app_state: Any,
+    initial_state: dict[str, Any],
+    thread_id: str,
+    phone: str,
+    wamid: str,
+) -> None:
+    """Run qa_graph.ainvoke + dispatch outbound message + Chatwoot side-effects.
+
+    Wrapped in asyncio.create_task by the webhook handler so it does not
+    block the 200 OK response to Meta (Meta retries on non-200).
+    """
+    try:
+        final_state = await app_state.qa_graph.ainvoke(
+            initial_state,
+            config={"configurable": {"thread_id": thread_id}},
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error("qa_graph.run_failed", error_type=type(exc).__name__)
+        return
+
+    outbound = _extract_outbound(final_state)
+    if outbound:
+        await _send_outbound(app_state, phone, outbound, wamid)
+
+    # Chatwoot mark_resolved on terminal states
+    terminal_node = final_state.get("node")
+    if terminal_node in ("escalating", "closed") and hasattr(app_state, "chatwoot"):
+        try:
+            conv_id = getattr(app_state, "_chatwoot_conv_cache", {}).get(thread_id)
+            if conv_id:
+                await app_state.chatwoot.mark_resolved(conv_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("qa_graph.chatwoot.mark_resolved.failed", error_type=type(exc).__name__)
 
 
 @router.get("/meta")
@@ -92,7 +174,7 @@ async def verify(
 
 @router.post("/meta")
 async def receive(request: Request) -> Response:
-    """Receive Meta webhook events (HMAC -> parse -> dedup -> allowlist -> echo).
+    """Receive Meta webhook events (HMAC -> parse -> dedup -> allowlist -> firewall -> graph).
 
     Returns HTTP 200 once HMAC succeeds, regardless of downstream
     decisions (skip, dedup-hit, dispatch). Returning 5xx would make
@@ -118,7 +200,7 @@ async def receive(request: Request) -> Response:
         log.warning("webhook.malformed", error=type(exc).__name__, error_count=exc.error_count())
         return Response(status_code=200)
 
-    # 4. Per-message dispatch (D-15 order: dedup -> allowlist -> echo).
+    # 4. Per-message dispatch (D-15 order: dedup -> allowlist -> firewall -> graph).
     meta = request.app.state.meta
     redis = request.app.state.redis
 
@@ -137,13 +219,97 @@ async def receive(request: Request) -> Response:
                 continue
 
             for msg in value.messages or []:
-                await _dispatch_message(msg=msg, meta=meta, redis=redis)
+                await _dispatch_message(msg=msg, meta=meta, redis=redis, request=request)
 
     return Response(status_code=200)
 
 
-async def _dispatch_message(*, msg: InboundMessage, meta: Any, redis: Any) -> None:
-    """Apply dedup -> allowlist -> echo, in that order (D-15).
+async def _reset_if_closed(app_state: Any, thread_id: str) -> None:
+    """If the thread's last state.node == 'closed', reset checkpoint."""
+    checkpointer = getattr(app_state, "checkpointer", None)
+    if checkpointer is None:
+        return
+    try:
+        config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+        existing = await checkpointer.aget(config)
+        if existing is not None:
+            channel_values = existing.get("channel_values", {})
+            if channel_values.get("node") == "closed":
+                if hasattr(checkpointer, "adelete_thread"):
+                    await checkpointer.adelete_thread(thread_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("webhook.checkpoint.read_failed", error_type=type(exc).__name__)
+
+
+async def _handle_text_message(
+    *, msg: InboundMessage, meta: Any, phone_hash: str, request: Request
+) -> None:
+    """Firewall + escape hatch + graph dispatch for inbound text messages."""
+    raw_text = msg.text.body  # type: ignore[union-attr]
+
+    # Step 1: Prompt firewall (D-15, T-LLM01). Blocked → send T-06, no graph.
+    sanitize_result = sanitize(raw_text)
+    if sanitize_result.blocked:
+        log.warning(
+            "webhook.firewall.blocked",
+            reason=sanitize_result.reason,
+            phone_hash=phone_hash,
+            result="blocked_firewall",
+        )
+        try:
+            await meta.send_text(to=msg.from_, body=T_06)
+        except Exception as exc:  # noqa: BLE001
+            log.error("webhook.firewall.send_t06.failed", error_type=type(exc).__name__)
+        return
+
+    # Step 2: Layer 1 escape hatch regex (D-15). Match → flag force_escalate.
+    force_escalate = bool(ESCAPE_REGEX.search(raw_text))
+
+    # Step 3: Build thread_id (E.164 normalized phone) + reset if closed.
+    thread_id = _normalize_e164(msg.from_)
+    app_state = request.app.state
+    await _reset_if_closed(app_state, thread_id)
+
+    # Step 4: Build initial state and dispatch graph via asyncio.create_task.
+    initial: dict[str, Any] = {
+        "messages": [HumanMessage(content=sanitize_result.cleaned)],
+        "force_escalate": force_escalate,
+        "wa_phone": msg.from_,
+    }
+    if hasattr(app_state, "qa_graph"):
+        task = asyncio.create_task(
+            _run_and_dispatch(
+                app_state=app_state,
+                initial_state=initial,
+                thread_id=thread_id,
+                phone=msg.from_,
+                wamid=msg.id,
+            )
+        )
+        task.add_done_callback(_log_task_error)
+
+    # Step 5: Mirror inbound via ARQ (async, non-blocking).
+    if hasattr(app_state, "arq") and app_state.arq is not None:
+        try:
+            await app_state.arq.enqueue_job(
+                "mirror_inbound", phone=msg.from_, text=raw_text, wamid=msg.id
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("webhook.mirror_inbound.failed", error_type=type(exc).__name__)
+
+    log.info(
+        "webhook.text.dispatched",
+        message_id=msg.id,
+        phone_hash=phone_hash,
+        force_escalate=force_escalate,
+        result="dispatched",
+    )
+
+
+async def _dispatch_message(
+    *, msg: InboundMessage, meta: Any, redis: Any, request: Request
+) -> None:
+    """Apply dedup -> allowlist -> firewall -> graph dispatch, in that order (D-15).
 
     ``meta`` and ``redis`` are typed ``Any`` because their concrete types
     live in ``app.state`` (MetaCloudClient and redis.asyncio.Redis) and
@@ -176,28 +342,9 @@ async def _dispatch_message(*, msg: InboundMessage, meta: Any, redis: Any) -> No
         )
         return
 
-    # 4d. Echo dispatch.
+    # 4d. Text message: firewall + escape hatch + graph dispatch (Plan 03-05).
     if msg.type == "text" and msg.text is not None:
-        reply = format_echo(msg.text.body)
-        try:
-            wamid = await meta.send_text(to=msg.from_, body=reply)
-        except Exception as exc:  # noqa: BLE001
-            log.exception(
-                "webhook.echo.error",
-                message_id=msg.id,
-                phone_hash=phone_hash,
-                error_type=type(exc).__name__,
-                result="error",
-            )
-            return
-        log.info(
-            "webhook.echo.sent",
-            message_id=msg.id,
-            phone_hash=phone_hash,
-            reply_len=len(reply),
-            outbound_wamid=wamid,
-            result="echo_sent",
-        )
+        await _handle_text_message(msg=msg, meta=meta, phone_hash=phone_hash, request=request)
         return
 
     if msg.type in {"image", "audio", "sticker", "video", "document", "voice", "location"}:
