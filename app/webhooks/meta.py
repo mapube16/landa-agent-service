@@ -242,6 +242,30 @@ async def _reset_if_closed(app_state: Any, thread_id: str) -> None:
         log.warning("webhook.checkpoint.read_failed", error_type=type(exc).__name__)
 
 
+async def _send_searching_ack(*, app_state: Any, thread_id: str, phone: str, meta: Any) -> None:
+    """Send a brief 'searching' text when the thread is awaiting document input.
+
+    Peeks at the checkpointer state; if asked_for_doc=True the next graph turn
+    will call SoftSeguros — send an ack so the user doesn't feel abandoned.
+    """
+    checkpointer = getattr(app_state, "checkpointer", None)
+    if checkpointer is None:
+        return
+    try:
+        config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+        existing = await checkpointer.aget(config)
+        if existing is None:
+            return
+        channel_values = existing.get("channel_values", {})
+        if (
+            channel_values.get("asked_for_doc")
+            and channel_values.get("node") == "awaiting_identification"
+        ):
+            await meta.send_text(to=phone, body="Buscando tu información, un momento... 🔍")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("webhook.searching_ack.failed", error_type=type(exc).__name__)
+
+
 async def _handle_text_message(
     *, msg: InboundMessage, meta: Any, phone_hash: str, request: Request
 ) -> None:
@@ -270,6 +294,10 @@ async def _handle_text_message(
     thread_id = _normalize_e164(msg.from_)
     app_state = request.app.state
     await _reset_if_closed(app_state, thread_id)
+
+    # Step 3b: If the thread is awaiting a document, send a "searching" ack
+    # immediately so the user sees activity while SoftSeguros is queried.
+    await _send_searching_ack(app_state=app_state, thread_id=thread_id, phone=msg.from_, meta=meta)
 
     # Step 4: Build initial state and dispatch graph via asyncio.create_task.
     initial: dict[str, Any] = {
