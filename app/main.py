@@ -50,6 +50,7 @@ log = structlog.get_logger("main")
 # noqa: E402 — intentional: these imports must come AFTER logging/Sentry init.
 from app.healthcheck import router as health_router  # noqa: E402
 from app.integrations.openrouter import get_llm  # noqa: E402
+from app.integrations.softseguros import get_softseguros_client  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -79,6 +80,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # setup() creates LangGraph checkpoint tables if not already present.
     # Idempotent — safe to call after alembic migration has already run.
     await app.state.checkpointer.setup()
+
+    # 5. SoftSeguros client (httpx singleton; factory leaves redis=None,
+    #    we late-bind it from app.state.redis here so the cache layer is
+    #    wired now that step 2 has Redis up).
+    #    late-binding allowed: lifespan is the single owner of singletons.
+    app.state.softseguros = get_softseguros_client()
+    app.state.softseguros._redis = app.state.redis
 
     log.info("lifespan.startup.complete")
     try:
@@ -172,6 +180,22 @@ async def test_sentry() -> dict[str, Any]:
     NOT for production — gate or remove in F5.
     """
     raise RuntimeError("synthetic test error from /test/sentry")
+
+
+@app.get("/test/poliza/{poliza_id}")
+async def test_poliza(poliza_id: str, request: Request) -> dict[str, Any]:
+    """Verify SoftSeguros client end-to-end (D-10).
+
+    Returns raw upstream JSON without LLM transformation. NOT for
+    production — gate or remove in F5.
+    """
+    t0 = time.perf_counter()
+    client = request.app.state.softseguros
+    poliza = await client.get_poliza(poliza_id)
+    return {
+        "poliza": poliza,
+        "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+    }
 
 
 __all__ = ["app", "lifespan"]
