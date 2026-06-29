@@ -22,6 +22,7 @@ on Redis failure (bypass-on-cache-down, same pattern as softseguros.py).
 
 from __future__ import annotations
 
+import asyncio
 from functools import lru_cache
 from typing import Any, Literal
 
@@ -89,30 +90,118 @@ class ChatwootClient:
         """
         phone_hash = _hash_phone(phone)
         cache_key = f"chatwoot:conv:{phone_hash}".encode()
+        lock_key = f"chatwoot:lock:{phone_hash}".encode()
 
-        # -- Cache read-through (bypass-on-cache-down) -----------------------
-        cached: bytes | None = None
-        if self._redis is not None:
-            try:
-                cached = await self._redis.get(cache_key)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("chatwoot.cache.read_error", error_type=type(exc).__name__)
+        # -- Fast path: cache hit -------------------------------------------
+        cached = await self._cache_get(cache_key)
         if cached is not None:
-            return int(cached.decode())
+            return cached
 
-        # -- Cache miss: two-step contact + conversation create --------------
-        contact_id = await self._create_or_get_contact(phone)
-        conv_id = await self._create_conversation(contact_id, phone)
+        # -- Slow path: serialize the create section across parallel jobs ----
+        # mirror_inbound and mirror_outbound are enqueued microseconds apart
+        # for the first message of a new client. Without a lock both miss the
+        # cache, both create a fresh conversation, and Chatwoot ends up with
+        # split threads for the same client. SET NX (15s TTL) gates the
+        # critical section; losers poll the cache for the winner's result.
+        got_lock = await self._acquire_lock(lock_key, ttl=15)
+        if not got_lock:
+            polled = await self._poll_cache(cache_key, attempts=30, interval=0.5)
+            if polled is not None:
+                return polled
+            # Lock holder timed out or crashed -- fall through and create.
 
-        # -- Cache write (bypass-on-failure) ---------------------------------
-        if self._redis is not None:
-            try:
-                await self._redis.set(cache_key, str(conv_id).encode(), ex=604800)  # 7 days
-            except Exception as exc:  # noqa: BLE001
-                log.warning("chatwoot.cache.write_error", error_type=type(exc).__name__)
+        try:
+            # Re-check cache inside the lock (winner may have populated between
+            # fast-path check and lock acquire).
+            cached = await self._cache_get(cache_key)
+            if cached is not None:
+                return cached
 
-        log.info("chatwoot.conv.created", phone_hash=phone_hash, conv_id=conv_id)
-        return conv_id
+            contact_id = await self._create_or_get_contact(phone)
+
+            # Prefer reusing an existing open conversation over creating a new
+            # one. Even with the lock, a different process / earlier deploy
+            # may have left an open thread for this contact.
+            existing = await self._find_open_conversation(contact_id)
+            if existing is not None:
+                conv_id = existing
+                log.info("chatwoot.conv.reused", phone_hash=phone_hash, conv_id=conv_id)
+            else:
+                conv_id = await self._create_conversation(contact_id, phone)
+                log.info("chatwoot.conv.created", phone_hash=phone_hash, conv_id=conv_id)
+
+            await self._cache_set(cache_key, conv_id, ttl=604800)  # 7 days
+            return conv_id
+        finally:
+            await self._release_lock(lock_key)
+
+    # -- Redis lock + cache helpers ------------------------------------------
+
+    async def _cache_get(self, key: bytes) -> int | None:
+        if self._redis is None:
+            return None
+        try:
+            raw = await self._redis.get(key)
+        except Exception as exc:  # noqa: BLE001 — bypass-on-cache-down
+            log.warning("chatwoot.cache.read_error", error_type=type(exc).__name__)
+            return None
+        return int(raw.decode()) if raw is not None else None
+
+    async def _cache_set(self, key: bytes, conv_id: int, ttl: int) -> None:
+        if self._redis is None:
+            return
+        try:
+            await self._redis.set(key, str(conv_id).encode(), ex=ttl)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chatwoot.cache.write_error", error_type=type(exc).__name__)
+
+    async def _acquire_lock(self, key: bytes, ttl: int) -> bool:
+        if self._redis is None:
+            return True  # no redis → no serialization, but proceed
+        try:
+            return bool(await self._redis.set(key, b"1", nx=True, ex=ttl))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chatwoot.lock.acquire_error", error_type=type(exc).__name__)
+            return True  # fail-open so jobs never wedge
+
+    async def _release_lock(self, key: bytes) -> None:
+        if self._redis is None:
+            return
+        try:
+            await self._redis.delete(key)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chatwoot.lock.release_error", error_type=type(exc).__name__)
+
+    async def _poll_cache(self, key: bytes, *, attempts: int, interval: float) -> int | None:
+        for _ in range(attempts):
+            await asyncio.sleep(interval)
+            cached = await self._cache_get(key)
+            if cached is not None:
+                return cached
+        return None
+
+    async def _find_open_conversation(self, contact_id: int) -> int | None:
+        """Return the most recent open conversation for ``contact_id``, or None."""
+        path = f"/api/v1/accounts/{self._account_id}/contacts/{contact_id}/conversations"
+        try:
+            r = await self._http.get(path)
+            r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            log.warning(
+                "chatwoot.contact.conversations.failed",
+                contact_id=contact_id,
+                status=exc.response.status_code,
+            )
+            return None
+        # Response shape: {"payload": [{"id": <int>, "status": "open"|..., ...}]}
+        payload = r.json().get("payload", [])
+        open_convs = [c for c in payload if c.get("status") == "open"]
+        if not open_convs:
+            return None
+        # Most recent open conversation -- Chatwoot returns sorted by created_at
+        # descending in the contacts endpoint; defensive sort in case it changes.
+        open_convs.sort(key=lambda c: c.get("created_at", 0), reverse=True)
+        return int(open_convs[0]["id"])
 
     async def _create_or_get_contact(self, phone: str) -> int:
         """POST /contacts; on 422 duplicate, recover via GET /contacts/search.

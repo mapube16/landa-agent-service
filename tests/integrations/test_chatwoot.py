@@ -37,6 +37,7 @@ def stub_redis() -> MagicMock:
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)
     redis.set = AsyncMock(return_value=True)
+    redis.delete = AsyncMock(return_value=1)
     return redis
 
 
@@ -132,16 +133,20 @@ async def test_get_or_create_conversation_cache_miss_creates_contact_and_convers
     conv_response = _make_response(200, {"id": 42, "status": "open"})
 
     stub_http.post.side_effect = [contact_response, conv_response]
+    # GET /contacts/{id}/conversations -> empty so we proceed to create
+    stub_http.get.return_value = _make_response(200, {"payload": []})
 
     result = await chatwoot_client.get_or_create_conversation("+15555550100")
 
     assert result == 42
     # Two POST calls: contacts + conversations
     assert stub_http.post.await_count == 2
-    # Cache write called once with 7-day TTL
-    stub_redis.set.assert_awaited_once()
-    set_call = stub_redis.set.call_args
-    assert set_call[1]["ex"] == 604800
+    # Cache write happened with 7-day TTL (lock acquire also calls SET with NX/EX=15;
+    # find the actual conversation-cache write among the calls).
+    cache_writes = [
+        call for call in stub_redis.set.call_args_list if call.kwargs.get("ex") == 604800
+    ]
+    assert len(cache_writes) == 1
 
 
 # ---------------------------------------------------------------------------
