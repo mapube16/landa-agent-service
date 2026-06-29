@@ -74,3 +74,15 @@ class WorkerSettings:
 
     functions: list[Any] = [mirror_inbound, mirror_outbound]
     redis_settings: RedisSettings = RedisSettings.from_dsn(settings.redis.url.get_secret_value())
+
+    @staticmethod
+    async def on_startup(ctx: dict[str, Any]) -> None:
+        """Log registered job names so we can verify the right code is deployed."""
+        import structlog
+
+        log = structlog.get_logger("worker.startup")
+        log.info(
+            "worker.functions.registered",
+            count=len(WorkerSettings.functions),
+            names=[f.__name__ for f in WorkerSettings.functions],
+        )
