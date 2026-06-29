@@ -11,6 +11,8 @@ lifespan to get the runnable graph.
 
 from __future__ import annotations
 
+from typing import Any
+
 from langgraph.graph import END, StateGraph
 
 from app.features.qa.nodes import (
@@ -24,6 +26,17 @@ from app.features.qa.nodes import (
     route_from_policy_choice,
 )
 from app.features.qa.state import QAState
+
+
+def _route_entry(state: dict[str, Any]) -> str:
+    """Pick entry node based on persisted state — avoid re-running node_identify
+    after the user is already identified."""
+    if state.get("poliza_id"):
+        return "answering_qa"
+    if state.get("polizas_list") and state.get("node") == "awaiting_policy_choice":
+        return "awaiting_policy_choice"
+    return "awaiting_identification"
+
 
 __all__ = ["build_qa_graph"]
 
@@ -43,26 +56,26 @@ def build_qa_graph() -> StateGraph:  # type: ignore[type-arg]
     builder.add_node("escalating", node_escalate)
     builder.add_node("closed", node_close)
 
-    builder.set_entry_point("awaiting_identification")
+    builder.set_conditional_entry_point(
+        _route_entry,
+        {
+            "awaiting_identification": "awaiting_identification",
+            "awaiting_policy_choice": "awaiting_policy_choice",
+            "answering_qa": "answering_qa",
+        },
+    )
 
-    # Conditional edges — routes driven by state.node set by each node fn
+    # ponytail: every non-terminal node emits a message that needs the user's
+    # next reply, so all routes end the turn — no intra-invocation chaining.
     builder.add_conditional_edges(
         "awaiting_identification",
         route_from_identification,
-        {
-            "awaiting_policy_choice": "awaiting_policy_choice",
-            "answering_qa": "answering_qa",
-            "escalating": "escalating",
-            END: END,  # ponytail: wait for next user message instead of looping
-        },
+        {"escalating": "escalating", END: END},
     )
     builder.add_conditional_edges(
         "awaiting_policy_choice",
         route_from_policy_choice,
-        {
-            "answering_qa": "answering_qa",
-            "awaiting_policy_choice": "awaiting_policy_choice",
-        },
+        {END: END},
     )
     builder.add_conditional_edges(
         "answering_qa",

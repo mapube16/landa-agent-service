@@ -198,21 +198,18 @@ async def node_identify(state: QAState) -> dict[str, Any]:
     }
 
 
-def route_from_identification(
-    state: QAState,
-) -> Literal["awaiting_policy_choice", "answering_qa", "escalating"] | str:
-    """Conditional edge after node_identify — reads state.node set by the node.
+def route_from_identification(state: QAState) -> str:
+    """Conditional edge after node_identify.
 
-    Returns END (via the string sentinel) when node_identify wants to wait for
-    the next user message (T-01 or T-02 emitted). This stops the graph from
-    looping back into node_identify within the same invocation.
+    Always ends the turn except on escalation. node_identify emits a message
+    on every path that requires a user response (T-01, T-02, T-04, the N=1
+    confirmation), so we never chain to another node in the same invocation.
     """
     from langgraph.graph import END
 
-    n = state.get("node", "awaiting_identification")
-    if n == "awaiting_identification":
-        return END
-    return n
+    if state.get("node") == "escalating":
+        return "escalating"
+    return END
 
 
 # ---------------------------------------------------------------------------
@@ -302,11 +299,15 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:
     }
 
 
-def route_from_policy_choice(
-    state: QAState,
-) -> Literal["answering_qa", "awaiting_policy_choice"]:
-    """Conditional edge after node_choose_policy."""
-    return state.get("node", "awaiting_policy_choice")  # type: ignore[return-value]
+def route_from_policy_choice(state: QAState) -> str:
+    """Conditional edge after node_choose_policy — always end the turn.
+
+    Whether the choice resolved (poliza locked, confirmation emitted) or
+    didn't (re-prompt emitted), the next step needs the user's reply.
+    """
+    from langgraph.graph import END
+
+    return END
 
 
 # ---------------------------------------------------------------------------
