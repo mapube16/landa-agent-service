@@ -304,3 +304,91 @@ async def test_public_get_methods_route_to_correct_paths(
     call_args = stub_http.get.call_args
     assert call_args.args[0] == expected_path
     assert call_args.kwargs.get("params") == expected_params
+
+
+# ---------------------------------------------------------------------------
+# get_clientes_by_documento (Plan 03-02 — D-01 identification by document)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_clientes_by_documento_cache_miss_calls_upstream(
+    mocked_client: Any, stub_http: MagicMock, stub_redis: MagicMock
+) -> None:
+    """Cache miss → exactly 1 GET with correct path + query param."""
+    stub_redis.get.return_value = None
+    stub_http.post.return_value = _make_response(200, {"token": "tok"})
+    stub_http.get.return_value = _make_response(200, {"id": 7, "nombres": "Empresa"})
+
+    result = await mocked_client.get_clientes_by_documento("12345678")
+
+    assert result == {"id": 7, "nombres": "Empresa"}
+    assert stub_http.get.call_count == 1
+    call_args = stub_http.get.call_args
+    assert call_args.args[0] == "/api/cliente/listar_cliente_por_documento/"
+    assert call_args.kwargs.get("params") == {"numero_documento": "12345678"}
+
+
+@pytest.mark.asyncio
+async def test_get_clientes_by_documento_cache_hit_skips_upstream(
+    mocked_client: Any, stub_http: MagicMock, stub_redis: MagicMock
+) -> None:
+    """Cache hit → same ClienteRaw returned; httpx.get never called."""
+    cached_payload = {"id": 7, "nombres": "Empresa"}
+    stub_redis.get.return_value = json.dumps(cached_payload).encode()
+
+    result = await mocked_client.get_clientes_by_documento("12345678")
+
+    assert result == cached_payload
+    assert stub_http.get.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_clientes_by_documento_breaker_open_raises_without_retry(
+    mocked_client: Any, stub_http: MagicMock, stub_redis: MagicMock
+) -> None:
+    """Open breaker → CircuitBreakerError; no upstream call made."""
+    from app.integrations import softseguros
+
+    stub_redis.get.return_value = None
+    softseguros.softseguros_breaker.open()
+    try:
+        with pytest.raises(pybreaker.CircuitBreakerError):
+            await mocked_client.get_clientes_by_documento("x")
+    finally:
+        softseguros.softseguros_breaker.close()
+
+    assert stub_http.get.call_count == 0
+
+
+def test_allowlist_includes_new_methods() -> None:
+    """CI guard allowlist contains both new method names from Plan 03-02."""
+    from tests.test_softseguros_readonly import METHOD_ALLOWLIST
+
+    assert "get_clientes_by_documento" in METHOD_ALLOWLIST
+    assert "get_polizas_by_cliente" in METHOD_ALLOWLIST
+
+
+# ---------------------------------------------------------------------------
+# get_polizas_by_cliente (Plan 03-02 — two-call pattern second leg)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_polizas_by_cliente_returns_results_list(
+    mocked_client: Any, stub_http: MagicMock, stub_redis: MagicMock
+) -> None:
+    """Cache miss → unpacks 'results' from paginated DRF response."""
+    stub_redis.get.return_value = None
+    stub_http.post.return_value = _make_response(200, {"token": "tok"})
+    polizas = [{"id": "P1", "numero_poliza": "001"}, {"id": "P2", "numero_poliza": "002"}]
+    stub_http.get.return_value = _make_response(
+        200, {"count": 2, "next": None, "previous": None, "results": polizas}
+    )
+
+    result = await mocked_client.get_polizas_by_cliente(7)
+
+    assert result == polizas
+    call_args = stub_http.get.call_args
+    assert call_args.args[0] == "/api/poliza/"
+    assert call_args.kwargs.get("params") == {"cliente": 7, "limit": 20}

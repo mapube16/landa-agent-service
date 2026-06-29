@@ -47,7 +47,7 @@ from tenacity import (
 )
 
 from app.config.settings import settings
-from app.models.softseguros import PolizaRaw
+from app.models.softseguros import ClienteRaw, PolizaRaw
 
 log = structlog.get_logger("integrations.softseguros")
 
@@ -258,6 +258,49 @@ class SoftSegurosClient:
         diagnostic use.
         """
         return await self._cached_get(poliza_id, "pagos", "/api/pagopoliza/", poliza_id=poliza_id)
+
+    async def get_clientes_by_documento(self, numero_documento: str) -> ClienteRaw:
+        """GET ``/api/cliente/listar_cliente_por_documento/?numero_documento={doc}``.
+
+        Returns a single ``ClienteRaw`` dict (NOT paginated) — confirmed shape
+        from 03-00-PROBE.md Probe 2 (122 fields, ``id`` is the cliente PK for
+        the secondary poliza call in ``get_polizas_by_cliente``).
+
+        READ-ONLY INVARIANT: see module docstring.
+        CI guard: name added to METHOD_ALLOWLIST in same commit
+        (tests/test_softseguros_readonly.py).
+        """
+        # ponytail: cache_id uses "doc:{numero_documento}" prefix to avoid
+        # collision with existing cliente/{id} keys in the same namespace.
+        result: ClienteRaw = await self._cached_get(  # type: ignore[assignment]
+            f"doc:{numero_documento}",
+            "cliente",
+            "/api/cliente/listar_cliente_por_documento/",
+            numero_documento=numero_documento,
+        )
+        return result
+
+    async def get_polizas_by_cliente(self, cliente_id: int) -> list[PolizaRaw]:
+        """GET ``/api/poliza/?cliente={cliente_id}&limit=20``.
+
+        Returns the paginated DRF response's ``results`` list — first 20 pólizas
+        owned by the given cliente. Two-call pattern required by 03-00-PROBE.md
+        (single-call fallback via ``cliente_numero_documento`` does NOT filter
+        server-side and returns the full 52 898-poliza universe).
+
+        READ-ONLY INVARIANT: see module docstring.
+        CI guard: name added to METHOD_ALLOWLIST in same commit
+        (tests/test_softseguros_readonly.py).
+        """
+        raw: dict[str, Any] = await self._cached_get(
+            str(cliente_id),
+            "polizas_by_cliente",
+            "/api/poliza/",
+            cliente=cliente_id,
+            limit=20,
+        )
+        results: list[PolizaRaw] = raw.get("results", [])
+        return results
 
 
 # ---------------------------------------------------------------------------
