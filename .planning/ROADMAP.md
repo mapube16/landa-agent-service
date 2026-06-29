@@ -65,6 +65,14 @@ Granularity: coarse — cada fase entrega valor verificable. Las fases se ejecut
 
 **Out of scope this phase**: LangGraph state machine, judge, decisión inteligente, Chatwoot.
 
+**Plans** (finalized 2026-06-28 — see `.planning/phases/02-integraci-n-softseguros-whatsapp-cloud-api/02-PLAN.md` for waves + dep graph):
+- [ ] `02-01-PLAN.md` — Settings + Pydantic models + module skeletons + pre-commit deps (Wave 1)
+- [ ] `02-02-PLAN.md` — Meta Cloud API integration (client + webhook + HMAC + idempotency + echo) (Wave 2)
+- [ ] `02-03-PLAN.md` — SoftSeguros integration (client + tenacity + pybreaker + cache + READ-ONLY CI guard) (Wave 2)
+- [ ] `02-04-PLAN.md` — End-to-end smoke verification (operator-driven Railway smoke) (Wave 3)
+
+Note: CONTEXT D-08 supersedes the Meta v18.0 wording above — the actual plans pin `META_API_VERSION = "v21.0"`.
+
 ---
 
 ## Phase 3: Bot Q&A inbound + Chatwoot mirror
@@ -280,4 +288,4 @@ Plans:
 
 ---
 
-*Last updated: 2026-06-28 — added backlog 999.1 (Sentry→WhatsApp self-hosted webhook)*
+*Last updated: 2026-06-28 — Phase 2 planning finalized (4 plans, 3 waves) + backlog 999.1*
