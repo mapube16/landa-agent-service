@@ -105,21 +105,123 @@ Additional 100 keys (notifications, fiscal data, segmentation, vehicle/house own
 
 ## Task 2 — Chatwoot API Channel inbox setup
 
-**Status:** PENDING — awaiting operator action.
+### Final decision
 
-(See main session for the checkpoint protocol.)
+`CHATWOOT_INBOX_CHANNEL_TYPE = Channel::Api` ✅ verified end-to-end against the live inbox.
+
+### Operator actions completed
+
+1. Operator logged into Chatwoot UI.
+2. Inbox created via wizard: **Settings → Inboxes → Add Inbox → API channel** → name `landa-agent-mirror`, webhook URL left for F4 to wire.
+3. Access token captured from **Profile Settings → Access Token**.
+
+### Probe — `GET /api/v1/accounts/1/inboxes/2` (smoke verification)
+
+- **Status:** `200 OK`
+- **Top-level response keys count:** 39
+- **`channel_type`:** `Channel::Api` ✅ (NOT `Channel::Whatsapp` — that one is for F4)
+- **`name`:** `landa-agent-mirror`
+- **`inbox_identifier`:** present (UUID-like) — F3 does NOT use this directly; Chatwoot Application API authenticates via `api_access_token` header (per RESEARCH Pattern 5)
+- **`webhook_url`:** operator pre-filled with `https://landa-agent-service-production.up.railway.app/webhooks/chatwoot`. **F3 does NOT implement this endpoint** (it's F4 territory). Chatwoot will get 404s when posting events there; this is benign for F3 (mirror is one-way landa→chatwoot). F4 will own `/webhooks/chatwoot`.
+
+### Env vars (captured in operator transcript, NOT committed)
+
+The following env vars are recorded in the operator's session transcript and are scheduled to be set in Railway during **Plan 03-06** (smoke deploy) via `railway variable set`. **They are intentionally NOT pasted into this file** to avoid token leak through git history:
+
+| Variable | Source | Status |
+|---|---|---|
+| `CHATWOOT_URL` | URL del Railway deploy de Chatwoot (`https://chatwoot-production-d073.up.railway.app`) | captured ✅ |
+| `CHATWOOT_API_KEY` | Chatwoot Profile → Access Token | captured ✅ (rotación pendiente al cerrar F3) |
+| `CHATWOOT_ACCOUNT_ID` | `1` (single tenant) | captured ✅ |
+| `CHATWOOT_INBOX_ID` | `2` (numérico, del path `/app/accounts/1/inbox/2`) | captured ✅ |
+| `CHATWOOT_INBOX_CHANNEL_TYPE` | `Channel::Api` (validated por probe ✅) | captured ✅ |
+
+### Custom domain note (deferred — not a blocker)
+
+Chatwoot is currently served at `https://chatwoot-production-d073.up.railway.app`, NOT the planned `chat.landatech.org`. The custom domain + SSL was deferred at the close of Phase 1 (Phase 2 CONTEXT close summary). F3 works with whichever URL Chatwoot answers on — when the custom domain lands, only `CHATWOOT_URL` env var changes (no code change, no redeploy of landa-agent-service required).
+
+### Implications for downstream plans
+
+**Plan 03-01 — `ChatwootSettings`:**
+- All 4+1 env vars above declared with `SecretStr` for `CHATWOOT_API_KEY`, plain types for the rest. `env_prefix="CHATWOOT_"`. Add to `app/config/settings.py` following the `WhatsAppSettings` / `SoftSegurosSettings` pattern.
+
+**Plan 03-03 — `ChatwootClient`:**
+- httpx async client with base URL = `CHATWOOT_URL`, header `api_access_token: <CHATWOOT_API_KEY>`, `Content-Type: application/json`.
+- Methods: `create_conversation`, `post_message_incoming`, `post_message_outgoing`, `mark_resolved` (all hitting `/api/v1/accounts/{account_id}/conversations/...`).
+- `account_id` and `inbox_id` are constructor args (from settings), not per-call args.
+
+**Plan 03-04 — `chatwoot_settings_test`:**
+- Test that validates `settings.chatwoot.inbox_channel_type == "Channel::Api"` (literal check, NOT `Channel::Whatsapp` — prevents accidentally wiring F3 to the F4 inbox when F4 lands).
 
 ---
 
 ## Task 3 — Gemini Flash structured output via OpenRouter
 
-**Status:** PENDING — runs after Task 2 confirms Chatwoot creds (independent of Chatwoot, but executed atomically with Task 4 consolidation).
+### Final decision
+
+`STRUCTURED_OUTPUT_OK = true` ✅ — `with_structured_output(JudgeRubric)` via LangChain → OpenRouter → Gemini Flash is feasible.
+
+### Probe details
+
+- **Endpoint:** `POST https://openrouter.ai/api/v1/chat/completions`
+- **Model:** `google/gemini-2.5-flash` (env `LLM_MODEL_JUDGE` literal value)
+- **Temperature:** `0`
+- **Headers:** `Authorization: Bearer <OPENROUTER_API_KEY>`, `Content-Type: application/json`
+- **Body:** OpenAI-compatible chat completions, with `response_format.type = "json_schema"` and `response_format.json_schema.strict = true`
+- **Test schema:** `{is_in_scope: bool, factually_grounded: bool, rationale: str}` (3-field subset; full 8-flag `JudgeRubric` shape is structurally identical, just longer)
+
+### Probe results
+
+- **HTTP status:** `200 OK`
+- **`finish_reason`:** `stop` (clean termination)
+- **`provider`:** present in response (which actual backend served the request)
+- **`choices[0].message.content`:** parseable as JSON, matches schema exactly
+- **`is_in_scope`:** `true` (correctly identified saldo question as in-scope)
+- **`factually_grounded`:** `false` (correctly identified that no tool output was provided to verify grounding) — judge actually applied reasoning, not just template fill
+- **`rationale`:** 228-char Spanish text explaining the reasoning
+- **Token usage:** `prompt_tokens=76, completion_tokens=81` (~157 total per judge call — cost predictable, ~$0.000035 per call at Flash pricing)
+
+### Implications for downstream plans
+
+**Plan 03-01 — `JudgeRubric` Pydantic model + skeleton:**
+- Use full 8-flag schema per CONTEXT D-05 (`is_in_scope`, `leaks_other_polizas`, `affirms_payment_without_cartera_approval`, `factually_grounded`, `no_jailbreak_echo`, `no_pii_leak`, `no_external_links`, `sentiment_appropriate`, plus `rationale: str`).
+- All 8 boolean fields are `Required` in the JSON schema (not `Optional`) — OpenAI-compat strict mode rejects optional booleans.
+
+**Plan 03-04 — `judge.py`:**
+- Use `get_llm("judge").with_structured_output(JudgeRubric)` — LangChain handles the `response_format.json_schema` wiring automatically.
+- `temperature=0` already enforced at LLM factory level for judge role (CLAUDE.md + CONTEXT D-07).
+- Token budget per judge call: ~150-200 total tokens (input prompt depends on system prompt + outbound message length; F3 has no hard cap per CONTEXT D-08).
+
+**Plan 03-04 — `kb_auditor.py` LLM judge layer:**
+- Same pattern with a different schema (`KBAuditRubric` — Layer 4 of the 5-layer pipeline). Same model (`LLM_MODEL_JUDGE` env var value, Gemini Flash temp=0).
 
 ---
 
-## Task 4 — Consolidation
+## Task 4 — Consolidation (this file)
 
-This file IS the consolidation artifact. Section above for Task 1 is final. Tasks 2 + 3 sections will be filled in once the operator completes Chatwoot setup and the Gemini Flash probe runs.
+All three probes have produced actionable findings:
+
+| Open Question | Status | Blocker resolved |
+|---|---|---|
+| RESEARCH #1 — `listar_cliente_por_documento` shape | ✅ resolved | Plan 03-01 `ClienteRaw` + Plan 03-02 `get_clientes_by_documento` + `get_polizas_by_cliente` |
+| RESEARCH #2 — Chatwoot operability at chat.landatech.org | ✅ resolved (with deferral note) | Plan 03-01 `ChatwootSettings` + Plan 03-03 `ChatwootClient` |
+| RESEARCH #3 — Gemini Flash structured output via OpenRouter | ✅ resolved | Plan 03-04 `judge.py` + `kb_auditor.py` |
+
+**Wave 1 is unblocked.** Plans 03-01..03-06 can now proceed against confirmed contracts.
+
+### Operator-side TODOs (deferred to plan 03-06)
+
+When Plan 03-06 runs the smoke deploy, the operator must set these in Railway (already captured in transcript):
+
+```bash
+railway variable set CHATWOOT_URL=<value from probe>
+railway variable set CHATWOOT_API_KEY=<value from probe>
+railway variable set CHATWOOT_ACCOUNT_ID=1
+railway variable set CHATWOOT_INBOX_ID=2
+railway variable set CHATWOOT_INBOX_CHANNEL_TYPE=Channel::Api
+```
+
+Plus rotate `SOFTSEGUROS_PASSWORD` and `CHATWOOT_API_KEY` once F3 closes (both values leaked through this session's transcript per established F2 pattern with `WA_TOKEN`).
 
 ---
 
