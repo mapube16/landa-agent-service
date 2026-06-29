@@ -22,7 +22,7 @@ node functions set, so the graph edges are data-driven.
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any
 
 import pybreaker
 import structlog
@@ -403,11 +403,27 @@ async def node_answer(state: QAState) -> dict[str, Any]:
     }
 
 
-def route_from_answering(
-    state: QAState,
-) -> Literal["answering_qa", "escalating", "closed"]:
-    """Conditional edge after node_answer."""
-    return state.get("node", "answering_qa")  # type: ignore[return-value]
+def route_from_answering(state: QAState) -> str:
+    """Conditional edge after node_answer.
+
+    Three outcomes:
+    - Escalation / close → terminal nodes
+    - Judge rejected (retry pending) → self-loop into node_answer
+    - Approved (message tagged send_to_client) → END the turn
+    """
+    from langgraph.graph import END
+
+    node = state.get("node", "answering_qa")
+    if node in ("escalating", "closed"):
+        return node
+    # Judge approved: the last AIMessage carries the send_to_client flag.
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, AIMessage):
+            if msg.additional_kwargs.get("send_to_client"):
+                return END
+            break
+    # No send_to_client flag → judge rejected, retry on same node.
+    return "answering_qa"
 
 
 # ---------------------------------------------------------------------------

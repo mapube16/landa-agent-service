@@ -81,9 +81,10 @@ def build_qa_graph() -> StateGraph:  # type: ignore[type-arg]
         "answering_qa",
         route_from_answering,
         {
-            "answering_qa": "answering_qa",
+            "answering_qa": "answering_qa",  # judge retry self-loop
             "escalating": "escalating",
             "closed": "closed",
+            END: END,  # judge approved → wait for next user turn
         },
     )
 
