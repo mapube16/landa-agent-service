@@ -1,0 +1,62 @@
+name: KB Audit
+
+on:
+  pull_request:
+    paths:
+      - knowledge/dpg_cartera.md
+      - app/security/kb_auditor.py
+      - app/security/prompt_firewall.py
+
+jobs:
+  kb-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv==0.4.30
+
+      - name: Cache uv venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install deps
+        run: uv sync --frozen
+
+      - name: Run KB audit
+        run: uv run python -m app.security.kb_auditor
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REDIS_URL: redis://localhost:6379/0
+          POSTGRES_URL: postgresql://test:test@localhost:5432/test
+          APP_ENV: ci
+          APP_PUBLIC_URL: http://localhost:8000
+          APP_VERSION: 0.1.0
+          WA_TOKEN: dummy
+          WA_PHONE_ID: "1234567890"
+          WA_BUSINESS_ACCOUNT_ID: "1234567890"
+          WA_WEBHOOK_SECRET: dummy
+          WA_VERIFY_TOKEN: dummy
+          SOFTSEGUROS_BASE_URL: https://app.softseguros.com/
+          SOFTSEGUROS_USERNAME: dummy
+          SOFTSEGUROS_PASSWORD: dummy
+          CHATWOOT_URL: https://dummy.example.com
+          CHATWOOT_API_KEY: dummy
+          CHATWOOT_ACCOUNT_ID: "1"
+          CHATWOOT_INBOX_ID: "1"
+          LANGSMITH_API_KEY: dummy
+          LANGSMITH_PROJECT: landa-agent-ci
