@@ -36,6 +36,12 @@ repos:
           - asgi-correlation-id==5.0.1
           # Plan 01-05 wires ARQ worker REDIS_URL via RedisSettings.from_dsn.
           - arq==0.28.0
+          # Plan 02-01 introduces tenacity + pybreaker imports in
+          # app/integrations/softseguros.py and app/integrations/_circuit.py.
+          # mypy isolated env needs them for --strict (pattern from plans 01-02,
+          # 01-04, 01-05). Versions match pyproject.toml.
+          - tenacity==9.1.4
+          - pybreaker==1.4.1
         args: [--strict, --explicit-package-bases]
         files: ^app/
   - repo: https://github.com/pre-commit/pre-commit-hooks
