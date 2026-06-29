@@ -234,7 +234,8 @@ async def _reset_if_closed(app_state: Any, thread_id: str) -> None:
         existing = await checkpointer.aget(config)
         if existing is not None:
             channel_values = existing.get("channel_values", {})
-            if channel_values.get("node") == "closed":
+            # Reset on any terminal node so next message starts fresh
+            if channel_values.get("node") in ("closed", "escalating"):
                 if hasattr(checkpointer, "adelete_thread"):
                     await checkpointer.adelete_thread(thread_id)
     except Exception as exc:  # noqa: BLE001
