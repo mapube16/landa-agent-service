@@ -119,6 +119,13 @@ app/
 - ❌ **No commitear** `venv/`, `__pycache__/`, `.env`, credenciales — está en `.gitignore`
 - ❌ **No generar el mensaje "pago confirmado" desde el LLM libremente** — solo puede aparecer en el path post-aprobación de cartera, con marca de procedencia verificada por `output_firewall`
 - ❌ **No exponer al LLM tools de tipo `list_all_*` o `search_*`** — todas las queries están scopeadas a la póliza activa de la conversación
+- ❌ **No agregar métodos write (POST/PUT/PATCH/DELETE) en `SoftSegurosClient`**. El bot es READ-ONLY contra SoftSeguros por diseño. Adding write methods requires:
+  1. ADR documentado en `.planning/adr/`
+  2. Threat model actualizado en PROJECT.md §"Seguridad"
+  3. PROJECT.md scope explícitamente actualizado para incluir el write
+  4. Operator approval explícito
+
+  CI guard `tests/test_softseguros_readonly.py` falla el build automáticamente si aparecen verbos prohibidos (`post`/`put`/`patch`/`delete`/`create_`/`update_`/`set_`/`modify_`) en method names de `SoftSegurosClient`. Excepción: top-level `_get_token` y `_refresh_token_on_401` POSTean a `/api-token-auth/` (auth bootstrap, no escritura de datos del cliente) — esto está documentado en el módulo docstring READ-ONLY INVARIANT.
 
 ---
 
