@@ -223,7 +223,11 @@ Estas decisiones las resuelvo durante research/planning sin re-consultar — son
 - **Audit log inmutable + hash chain + S3 sink** — F5.
 - **Voice handoff (POST /case/handoff)** — F6.
 - **Cliente vuelve después de 30+ días — política de re-identificación** — Claude's Discretion en F3 (resume desde checkpoint LangGraph indefinidamente). Si surge dolor en prod, F7 agrega TTL explícito.
-- **Doc update post-Phase 3:** actualizar `PROJECT.md` línea 85 (`Identificación: cliente provee número de póliza` → `número de documento`) + `CLAUDE.md` (regla de identificación) + entry en `## Key Decisions` de PROJECT.md. Es un commit `docs(03):` aparte cuando F3 cierre.
+- **Doc update post-Phase 3:** un commit `docs(03):` aparte cuando F3 cierre, cubriendo:
+  - `PROJECT.md` línea 85 (`Identificación: cliente provee número de póliza` → `número de documento`)
+  - `CLAUDE.md` regla de identificación (póliza → documento)
+  - Entry en `## Key Decisions` de PROJECT.md
+  - **Excepción a "No emojis en código ni mensajes generados" en CLAUDE.md** — agregar nota: "Excepción explícita en `app/features/qa/messages.py` templates T-01 (👋) y T-04 (1️⃣ 2️⃣ ...) por tono cálido WhatsApp cliente final — lockeado en Phase 3 CONTEXT D-14."
 
 </deferred>
 
