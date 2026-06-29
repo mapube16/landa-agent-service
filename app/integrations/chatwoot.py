@@ -115,12 +115,18 @@ class ChatwootClient:
         return conv_id
 
     async def _create_or_get_contact(self, phone: str) -> int:
-        """POST /contacts; on 422 duplicate, recover via GET /contacts/search."""
+        """POST /contacts; on 422 duplicate, recover via GET /contacts/search.
+
+        Chatwoot expects E.164 phone numbers WITH the ``+`` prefix; Meta
+        webhook payloads strip it. Normalize here so we don't double-create
+        the same contact under two spellings.
+        """
+        normalized = phone if phone.startswith("+") else f"+{phone}"
         path = f"/api/v1/accounts/{self._account_id}/contacts"
         payload = {
             "inbox_id": settings.chatwoot.inbox_id,
-            "phone_number": phone,
-            "identifier": phone,
+            "phone_number": normalized,
+            "identifier": normalized,
         }
         try:
             r = await self._http.post(path, json=payload)
@@ -131,8 +137,13 @@ class ChatwootClient:
             contact_id: int = r.json()["payload"]["contact"]["id"]
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 422:
+                log.warning(
+                    "chatwoot.contact.create.422",
+                    phone_hash=_hash_phone(phone),
+                    body=exc.response.text[:300],
+                )
                 # Chatwoot 422 on duplicate contact -- recover via search
-                contact_id = await self._search_contact(phone)
+                contact_id = await self._search_contact(normalized)
             else:
                 raise
         return contact_id
@@ -152,11 +163,12 @@ class ChatwootClient:
 
     async def _create_conversation(self, contact_id: int, phone: str) -> int:
         """POST /conversations to create a new conversation, return conv_id."""
+        normalized = phone if phone.startswith("+") else f"+{phone}"
         path = f"/api/v1/accounts/{self._account_id}/conversations"
         payload = {
             "inbox_id": settings.chatwoot.inbox_id,
             "contact_id": contact_id,
-            "source_id": phone,
+            "source_id": normalized,
         }
         r = await self._http.post(path, json=payload)
         r.raise_for_status()
