@@ -28,6 +28,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import structlog
+from arq.connections import RedisSettings as ArqRedisSettings
+from arq.connections import create_pool as arq_create_pool
 from asgi_correlation_id import CorrelationIdMiddleware
 from fastapi import FastAPI, Request
 from fastapi.responses import ORJSONResponse
@@ -48,10 +50,13 @@ init_sentry()
 log = structlog.get_logger("main")
 
 # noqa: E402 — intentional: these imports must come AFTER logging/Sentry init.
+from app.features.qa.graph import build_qa_graph  # noqa: E402
 from app.healthcheck import router as health_router  # noqa: E402
+from app.integrations.chatwoot import get_chatwoot_client  # noqa: E402
 from app.integrations.meta_cloud import get_meta_client  # noqa: E402
 from app.integrations.openrouter import get_llm  # noqa: E402
 from app.integrations.softseguros import get_softseguros_client  # noqa: E402
+from app.security.kb_auditor import audit_kb  # noqa: E402
 from app.webhooks.meta import router as meta_router  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -94,12 +99,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.softseguros = get_softseguros_client()
     app.state.softseguros._redis = app.state.redis
 
+    # 6. ARQ pool for background job enqueueing (mirror_inbound/mirror_outbound).
+    app.state.arq = await arq_create_pool(
+        ArqRedisSettings.from_dsn(settings.redis.url.get_secret_value())
+    )
+
+    # 7. Chatwoot client + late-bind redis (for conversation cache lookup).
+    app.state.chatwoot = get_chatwoot_client()
+    app.state.chatwoot._redis = app.state.redis
+
+    # 8. KB audit FAIL-CLOSED (D-11 startup gate).
+    #    Service refuses to start if KB content has high prompt-injection risk.
+    kb_risk = await audit_kb("knowledge/dpg_cartera.md", redis=app.state.redis)
+    if kb_risk > 50:
+        raise RuntimeError(f"KB audit failed: risk={kb_risk}. Service not started.")
+    if kb_risk > 20:
+        log.warning("lifespan.kb_audit.warn", risk=kb_risk)
+    else:
+        log.info("lifespan.kb_audit.ok", risk=kb_risk)
+
+    # 9. Compile LangGraph qa_graph with Postgres checkpointer.
+    app.state.qa_graph = build_qa_graph().compile(checkpointer=app.state.checkpointer)
+
     log.info("lifespan.startup.complete")
     try:
         yield
     finally:
         # Release in reverse acquisition order.
         log.info("lifespan.shutdown")
+        await app.state.arq.close()
         await app.state._cp_cm.__aexit__(None, None, None)
         await close_redis_pool(app.state.redis, app.state.redis_pool)
         await app.state.db_engine.dispose()
