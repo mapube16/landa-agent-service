@@ -152,7 +152,16 @@ async def _run_and_dispatch(
             config={"configurable": {"thread_id": thread_id}},
         )
     except Exception as exc:  # noqa: BLE001
-        log.error("qa_graph.run_failed", error_type=type(exc).__name__)
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        body = getattr(getattr(exc, "response", None), "text", "")[:300]
+        url = str(getattr(getattr(exc, "request", None), "url", ""))[:200]
+        log.error(
+            "qa_graph.run_failed",
+            error_type=type(exc).__name__,
+            status=status,
+            body=body,
+            url=url,
+        )
         return
 
     outbound = _extract_outbound(final_state)
