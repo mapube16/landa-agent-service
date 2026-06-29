@@ -65,6 +65,7 @@ class QAState(TypedDict, total=False):
     force_escalate: bool
     wa_phone: str
     asked_for_doc: bool  # True after T-01 emitted; prevents SoftSeguros call on greeting
+    polizas_page: int  # current page (0-based) when N>10, advanced by "__more" button
 
 
 __all__ = ["QAState"]

@@ -29,7 +29,7 @@ import structlog
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.features.qa.knowledge_base import load_kb
-from app.features.qa.messages import T_01, T_02, T_03, T_06, T_07, T_08, interpolate_t04
+from app.features.qa.messages import T_01, T_02, T_03, T_06, T_07, T_08
 from app.features.qa.prompts import system_prompt
 from app.features.qa.state import QAState
 from app.features.qa.tools import escalate_to_human, get_coberturas, get_estado, get_saldo
@@ -43,6 +43,11 @@ _TOOLS = [get_saldo, get_estado, get_coberturas, escalate_to_human]
 
 # Emoji number prefixes for policy lists (D-02)
 _EMOJI_NUMS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+# WhatsApp interactive list cap per Meta docs.
+_LIST_PAGE_SIZE = 9  # 9 polizas + 1 "Ver más" row = 10 total (Meta limit)
+_MORE_BUTTON_ID = "__more"
+_QA_BUTTON_IDS = {"saldo", "estado", "coberturas", "agente"}
 
 __all__ = [
     "node_answer",
@@ -79,6 +84,76 @@ def _build_policy_list(polizas: list[dict[str, Any]]) -> str:
         estado = p.get("estado_poliza_nombre", p.get("estado", ""))
         lines.append(f"{emoji} POL-{numero} ({ramo}, {estado})")
     return "\n".join(lines)
+
+
+def _polizas_list_message(polizas: list[dict[str, Any]], page: int) -> AIMessage:
+    """Build a paged interactive list AIMessage from the polizas list.
+
+    Meta caps interactive lists at 10 rows. We show ``_LIST_PAGE_SIZE`` rows
+    plus a "Ver más" row whenever more pages exist. The selected row's id is
+    the poliza_id (or numero_poliza fallback); the "Ver más" row uses
+    ``_MORE_BUTTON_ID`` and ``node_choose_policy`` advances ``polizas_page``.
+    """
+    n = len(polizas)
+    start = page * _LIST_PAGE_SIZE
+    end = min(start + _LIST_PAGE_SIZE, n)
+    page_slice = polizas[start:end]
+    has_more = end < n
+    rows: list[tuple[str, str, str | None]] = []
+    for p in page_slice:
+        pid = str(p.get("id", p.get("numero_poliza", "")))
+        numero = p.get("numero_poliza", pid)
+        ramo = p.get("ramo_nombre", p.get("ramo", ""))
+        estado = p.get("estado_poliza_nombre", p.get("estado", ""))
+        title = f"POL-{numero}"[:24]
+        desc = f"{ramo} · {estado}"[:72] if ramo or estado else None
+        rows.append((pid, title, desc))
+    if has_more:
+        rows.append((_MORE_BUTTON_ID, "Ver más pólizas", f"{n - end} restantes"))
+    body = (
+        f"Encontré {n} pólizas a tu nombre. Mostrando {start + 1}-{end}."
+        if has_more or page > 0
+        else f"Encontré {n} pólizas a tu nombre."
+    )
+    return AIMessage(
+        content=body,
+        additional_kwargs={
+            "interactive": {
+                "kind": "list",
+                "body": body,
+                "button_label": "Elegir póliza",
+                "rows": rows,
+                "section_title": "Tus pólizas",
+            },
+            "send_to_client": True,
+        },
+    )
+
+
+def _qa_menu_message(numero: str) -> AIMessage:
+    """3-button menu after a poliza is locked: saldo / estado / coberturas.
+
+    User can also type freely — buttons are a shortcut, not the only path.
+    """
+    body = (
+        f"Listo, sobre la póliza POL-{numero}. ¿Qué querés saber?"
+        " Tocá una opción o escribí tu pregunta."
+    )
+    return AIMessage(
+        content=body,
+        additional_kwargs={
+            "interactive": {
+                "kind": "buttons",
+                "body": body,
+                "buttons": [
+                    ("saldo", "Saldo"),
+                    ("estado", "Estado"),
+                    ("coberturas", "Coberturas"),
+                ],
+            },
+            "send_to_client": True,
+        },
+    )
 
 
 def _retry_or_escalate(doc_retries: int, text: str) -> dict[str, Any]:
@@ -177,24 +252,16 @@ async def node_identify(state: QAState) -> dict[str, Any]:
             "poliza_id": poliza_id,
             "cliente_doc": text,
             "polizas_list": polizas,
-            "messages": [
-                AIMessage(
-                    content=(
-                        f"Identifiqué tu póliza POL-{numero}."
-                        " ¿En qué puedo ayudarte?"
-                        " Puedo consultar saldo, estado o coberturas."
-                    )
-                )
-            ],
+            "messages": [_qa_menu_message(numero)],
         }
 
-    # N >= 2
-    lista_numerada = _build_policy_list(polizas)
+    # N >= 2 — interactive list (Meta limits 10 rows; we page in chunks of 9).
     return {
         "node": "awaiting_policy_choice",
         "polizas_list": polizas,
+        "polizas_page": 0,
         "cliente_doc": text,
-        "messages": [AIMessage(content=interpolate_t04(n, lista_numerada))],
+        "messages": [_polizas_list_message(polizas, page=0)],
     }
 
 
@@ -256,38 +323,58 @@ async def _resolve_by_llm_fallback(
 
 
 async def node_choose_policy(state: QAState) -> dict[str, Any]:
-    """Parse client's numeric policy choice and lock poliza_id in state."""
+    """Parse client's policy choice (interactive tap, numeric, or text) and lock poliza_id.
+
+    Resolution order:
+    1. ``__more`` button → advance ``polizas_page`` and re-emit the list.
+    2. Interactive list tap → ``text`` is the poliza_id we sent in the row id.
+    3. Numeric index (1, 2, 3…) for fallback typed input.
+    4. POL-XXXX pattern match.
+    5. LLM fallback over the allowlist.
+    """
     text = _last_human_text(state)
     polizas: list[dict[str, Any]] = state.get("polizas_list", [])
 
+    # 1. "Ver más" pagination
+    if text == _MORE_BUTTON_ID:
+        next_page = state.get("polizas_page", 0) + 1
+        return {
+            "node": "awaiting_policy_choice",
+            "polizas_page": next_page,
+            "messages": [_polizas_list_message(polizas, page=next_page)],
+        }
+
     resolved: dict[str, Any] | None = None
 
-    # Layer 1: numeric index
-    m = _NUMERIC_RE.match(text)
-    if m:
-        idx = int(m.group(1))
-        if 1 <= idx <= len(polizas):
-            resolved = polizas[idx - 1]
+    # 2. Interactive list tap — text == poliza_id (matches row id we sent)
+    for p in polizas:
+        pid = str(p.get("id", p.get("numero_poliza", "")))
+        if pid == text:
+            resolved = p
+            break
 
+    # 3. Numeric index (typed)
+    if resolved is None:
+        m = _NUMERIC_RE.match(text)
+        if m:
+            idx = int(m.group(1))
+            if 1 <= idx <= len(polizas):
+                resolved = polizas[idx - 1]
+
+    # 4. POL-XXXX pattern
     if resolved is None:
         resolved = _resolve_by_number_pattern(text, polizas)
 
+    # 5. LLM fallback
     if resolved is None:
         resolved = await _resolve_by_llm_fallback(text, polizas)
 
     if resolved is None:
-        # Stay in awaiting_policy_choice — re-prompt
+        # Stay in awaiting_policy_choice — re-prompt with the same list
+        page = state.get("polizas_page", 0)
         return {
             "node": "awaiting_policy_choice",
-            "messages": [
-                AIMessage(
-                    content=(
-                        "No entendí bien."
-                        " Por favor respondé con el número (1, 2, 3)"
-                        " o el número de póliza (POL-XXXXX) de la lista."
-                    )
-                )
-            ],
+            "messages": [_polizas_list_message(polizas, page=page)],
         }
 
     poliza_id = str(resolved.get("id", resolved.get("numero_poliza", "")))
@@ -295,7 +382,7 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:
     return {
         "node": "answering_qa",
         "poliza_id": poliza_id,
-        "messages": [AIMessage(content=f"Listo, sobre la póliza POL-{numero}. ¿Qué querés saber?")],
+        "messages": [_qa_menu_message(numero)],
     }
 
 
@@ -323,6 +410,16 @@ async def node_answer(state: QAState) -> dict[str, Any]:
     calls meta.send_text + arq.enqueue_job("mirror_outbound", ...) after
     the graph completes. Keeps nodes pure (no I/O side effects beyond LLM).
     """
+    # Layer 1 escape hatch (D-15): webhook sets force_escalate=True when the
+    # client's text matches ESCAPE_REGEX (humano/agente/asesor/…). Honor it
+    # before any LLM call — zero LLM cost, deterministic path to T_08.
+    if state.get("force_escalate"):
+        return {
+            "node": "escalating",
+            "escalation_reason": "escape_hatch",
+            "messages": [AIMessage(content=T_08)],
+        }
+
     poliza_id: str | None = state.get("poliza_id")
     judge_retries: int = state.get("judge_retries", 0)
     last_rationale: str | None = state.get("last_rejection_rationale")
@@ -397,7 +494,21 @@ async def node_answer(state: QAState) -> dict[str, Any]:
         "messages": [
             AIMessage(
                 content=final_response,
-                additional_kwargs={"send_to_client": True},
+                additional_kwargs={
+                    "send_to_client": True,
+                    # Attach quick-reply buttons so the client can keep tapping
+                    # through saldo/estado/coberturas without typing. The text
+                    # path still works — see _handle_text_message.
+                    "interactive": {
+                        "kind": "buttons",
+                        "body": final_response,
+                        "buttons": [
+                            ("saldo", "Saldo"),
+                            ("estado", "Estado"),
+                            ("agente", "Hablar humano"),
+                        ],
+                    },
+                },
             )
         ],
     }

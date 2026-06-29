@@ -28,6 +28,43 @@ class MessageText(BaseModel):
     body: str
 
 
+class ButtonReply(BaseModel):
+    """``interactive.button_reply`` payload when the user taps a quick-reply button."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str  # the id we sent in the button definition
+    title: str  # the label the user saw
+
+
+class ListReply(BaseModel):
+    """``interactive.list_reply`` payload when the user picks a list option."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    title: str
+    description: str | None = None
+
+
+class InteractiveReply(BaseModel):
+    """``message.interactive`` wrapper — exactly one of button_reply / list_reply set."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["button_reply", "list_reply"]
+    button_reply: ButtonReply | None = None
+    list_reply: ListReply | None = None
+
+    def selected_id(self) -> str | None:
+        """Return the id of the chosen button or list item, regardless of which kind."""
+        if self.button_reply is not None:
+            return self.button_reply.id
+        if self.list_reply is not None:
+            return self.list_reply.id
+        return None
+
+
 class InboundMessage(BaseModel):
     """One entry of ``value.messages[]`` — only the fields F2 reads."""
 
@@ -54,6 +91,8 @@ class InboundMessage(BaseModel):
     # Only poblado cuando type=="text"; otros media payloads (image/audio/etc.)
     # NO se modelan acá — el handler sólo necesita ``type`` para enrutar.
     text: MessageText | None = None
+    # Poblado cuando type=="interactive" — respuesta de botón o lista.
+    interactive: InteractiveReply | None = None
 
 
 class ChangeValue(BaseModel):
@@ -123,6 +162,116 @@ class OutboundText(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Outbound — Interactive messages (button reply + list)
+# https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates
+# ---------------------------------------------------------------------------
+
+
+class InteractiveButton(BaseModel):
+    """Single quick-reply button definition.
+
+    Meta limits:
+    - id: max 256 chars (we use short slugs like "saldo", "agente")
+    - title: max 20 chars, no emojis required but tolerated
+    - up to 3 buttons per message
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["reply"] = "reply"
+    reply: dict[str, str]  # {"id": "...", "title": "..."} per Meta schema
+
+
+class InteractiveButtonAction(BaseModel):
+    """``interactive.action`` block for button messages."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    buttons: list[InteractiveButton]
+
+
+class InteractiveButtonBody(BaseModel):
+    """``interactive`` block for type=button messages."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["button"] = "button"
+    body: dict[str, str]  # {"text": "..."} — the prompt above the buttons
+    action: InteractiveButtonAction
+
+
+class OutboundButtons(BaseModel):
+    """Outbound interactive button message (up to 3 quick-reply buttons)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    messaging_product: Literal["whatsapp"] = "whatsapp"
+    recipient_type: Literal["individual"] = "individual"
+    to: str
+    type: Literal["interactive"] = "interactive"
+    interactive: InteractiveButtonBody
+
+
+class InteractiveListRow(BaseModel):
+    """One row inside a section of an interactive list.
+
+    Meta limits:
+    - id: max 200 chars
+    - title: max 24 chars
+    - description: max 72 chars (optional)
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    title: str
+    description: str | None = None
+
+
+class InteractiveListSection(BaseModel):
+    """A section groups list rows under a heading.
+
+    Single-section lists work fine; multi-section is for >10 grouped rows.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str | None = None
+    rows: list[InteractiveListRow]
+
+
+class InteractiveListAction(BaseModel):
+    """``interactive.action`` block for list messages."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    button: str  # CTA label, e.g. "Ver pólizas"
+    sections: list[InteractiveListSection]
+
+
+class InteractiveListBody(BaseModel):
+    """``interactive`` block for type=list messages."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["list"] = "list"
+    body: dict[str, str]  # {"text": "..."}
+    action: InteractiveListAction
+
+
+class OutboundList(BaseModel):
+    """Outbound interactive list message (up to 10 rows total)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    messaging_product: Literal["whatsapp"] = "whatsapp"
+    recipient_type: Literal["individual"] = "individual"
+    to: str
+    type: Literal["interactive"] = "interactive"
+    interactive: InteractiveListBody
+
+
+# ---------------------------------------------------------------------------
 # Error (response body when Meta returns 4xx/5xx — RESEARCH "Code Examples")
 # ---------------------------------------------------------------------------
 
@@ -148,14 +297,26 @@ class MetaError(BaseModel):
 
 
 __all__ = [
+    "ButtonReply",
     "Change",
     "ChangeValue",
     "Entry",
     "InboundEnvelope",
     "InboundMessage",
+    "InteractiveButton",
+    "InteractiveButtonAction",
+    "InteractiveButtonBody",
+    "InteractiveListAction",
+    "InteractiveListBody",
+    "InteractiveListRow",
+    "InteractiveListSection",
+    "InteractiveReply",
+    "ListReply",
     "MessageText",
     "MetaError",
     "MetaErrorDetail",
+    "OutboundButtons",
+    "OutboundList",
     "OutboundText",
     "OutboundTextBody",
 ]

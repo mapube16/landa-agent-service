@@ -135,7 +135,14 @@ async def test_node_identify_multiple_polizas_emits_t04() -> None:
 
     assert result["node"] == "awaiting_policy_choice"
     assert len(result["polizas_list"]) == 3
-    assert any("1️⃣" in str(m.content) for m in result["messages"])
+    # Now we emit an interactive list with 3 rows (poliza ids) instead of a
+    # numbered emoji string. Verify the interactive payload is attached and
+    # the row ids match the poliza ids.
+    msg = result["messages"][0]
+    interactive = msg.additional_kwargs["interactive"]
+    assert interactive["kind"] == "list"
+    row_ids = [rid for rid, _, _ in interactive["rows"]]
+    assert row_ids == ["1", "2", "3"]
 
 
 @pytest.mark.asyncio

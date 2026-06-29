@@ -54,7 +54,7 @@ from app.config.settings import settings
 from app.features.handoff.echo import is_echo_allowed
 from app.features.qa.messages import ESCAPE_REGEX, T_06
 from app.integrations.meta_cloud import _hash_phone
-from app.models.meta import InboundEnvelope, InboundMessage
+from app.models.meta import InboundEnvelope, InboundMessage, MessageText
 from app.security.prompt_firewall import sanitize
 
 # Explicit user reset commands — wipe the checkpoint so the user can recover
@@ -91,36 +91,71 @@ def _log_task_error(task: asyncio.Task[Any]) -> None:
         log.error("qa_graph.task.error", error_type=type(exc).__name__)
 
 
-def _extract_outbound(final_state: dict[str, Any]) -> str | None:
-    """Return the content of the most recent AIMessage in state.
+def _extract_outbound_message(final_state: dict[str, Any]) -> Any | None:
+    """Return the most recent AIMessage object in state, or None.
 
-    Previous turns' approved AIMessages stay in the conversation history with
-    ``send_to_client=True``, so preferring tagged messages would re-send the
-    last approved answer when the current turn escalates. Just take the tail.
-    HumanMessages are never returned — that's the user's own text.
+    Returns the full message so the dispatcher can inspect ``additional_kwargs``
+    for an ``interactive`` payload (buttons / list). The mirror to Chatwoot
+    only takes the text representation.
     """
     from langchain_core.messages import AIMessage
 
     for msg in reversed(final_state.get("messages", [])):
         if isinstance(msg, AIMessage):
-            content = str(msg.content)
-            if content.strip():
-                return content
+            content = str(msg.content) if msg.content else ""
+            has_interactive = bool(msg.additional_kwargs.get("interactive"))
+            if content.strip() or has_interactive:
+                return msg
     return None
 
 
-async def _send_outbound(app_state: Any, phone: str, outbound: str, wamid: str) -> None:
-    """Send outbound message via meta + enqueue mirror job."""
+async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> None:
+    """Send outbound message via meta + enqueue mirror job.
+
+    ``msg`` is an AIMessage. If ``additional_kwargs['interactive']`` is set,
+    sends the rich variant (buttons / list); otherwise sends plain text.
+    The mirror to Chatwoot always uses a plain-text rendering so the agent
+    inbox stays readable.
+    """
     if not hasattr(app_state, "meta"):
         return
+    interactive = msg.additional_kwargs.get("interactive") if msg else None
+    text_for_mirror = str(msg.content) if msg.content else ""
     try:
-        await app_state.meta.send_text(to=phone, body=outbound)
+        if interactive and interactive.get("kind") == "buttons":
+            await app_state.meta.send_buttons(
+                to=phone,
+                body=interactive["body"],
+                buttons=[tuple(b) for b in interactive["buttons"]],
+            )
+            text_for_mirror = (
+                interactive["body"]
+                + "\n[opciones: "
+                + ", ".join(title for _, title in interactive["buttons"])
+                + "]"
+            )
+        elif interactive and interactive.get("kind") == "list":
+            await app_state.meta.send_list(
+                to=phone,
+                body=interactive["body"],
+                button_label=interactive["button_label"],
+                rows=[tuple(r) for r in interactive["rows"]],
+                section_title=interactive.get("section_title"),
+            )
+            text_for_mirror = (
+                interactive["body"]
+                + "\n[opciones: "
+                + ", ".join(title for _, title, _ in interactive["rows"])
+                + "]"
+            )
+        else:
+            await app_state.meta.send_text(to=phone, body=text_for_mirror)
     except Exception as exc:  # noqa: BLE001
         log.error("qa_graph.outbound.send_failed", error_type=type(exc).__name__)
     if hasattr(app_state, "arq") and app_state.arq is not None:
         try:
             await app_state.arq.enqueue_job(
-                "mirror_outbound", phone=phone, text=outbound, wamid=wamid + ":out"
+                "mirror_outbound", phone=phone, text=text_for_mirror, wamid=wamid + ":out"
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("qa_graph.mirror_outbound.failed", error_type=type(exc).__name__)
@@ -157,9 +192,9 @@ async def _run_and_dispatch(
         )
         return
 
-    outbound = _extract_outbound(final_state)
-    if outbound:
-        await _send_outbound(app_state, phone, outbound, wamid)
+    outbound_msg = _extract_outbound_message(final_state)
+    if outbound_msg is not None:
+        await _send_outbound(app_state, phone, outbound_msg, wamid)
 
     # Chatwoot mark_resolved on terminal states
     terminal_node = final_state.get("node")
@@ -414,6 +449,23 @@ async def _dispatch_message(
     # 4d. Text message: firewall + escape hatch + graph dispatch (Plan 03-05).
     if msg.type == "text" and msg.text is not None:
         await _handle_text_message(msg=msg, meta=meta, phone_hash=phone_hash, request=request)
+        return
+
+    # 4d'. Interactive reply (button tap / list pick): treat the selected id
+    # as the user's text input so node_choose_policy / node_answer route the
+    # conversation just like a typed reply.
+    if msg.type == "interactive" and msg.interactive is not None:
+        selected = msg.interactive.selected_id()
+        if selected:
+            msg.text = MessageText(body=selected)
+            await _handle_text_message(msg=msg, meta=meta, phone_hash=phone_hash, request=request)
+            return
+        log.info(
+            "webhook.interactive.empty",
+            message_id=msg.id,
+            phone_hash=phone_hash,
+            result="ignored_empty_interactive",
+        )
         return
 
     if msg.type in {"image", "audio", "sticker", "video", "document", "voice", "location"}:

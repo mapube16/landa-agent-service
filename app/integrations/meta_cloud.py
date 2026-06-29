@@ -21,13 +21,25 @@ from __future__ import annotations
 
 import hashlib
 from functools import lru_cache
-from typing import Final
+from typing import Any, Final
 
 import httpx
 import structlog
 
 from app.config.settings import settings
-from app.models.meta import OutboundText, OutboundTextBody
+from app.models.meta import (
+    InteractiveButton,
+    InteractiveButtonAction,
+    InteractiveButtonBody,
+    InteractiveListAction,
+    InteractiveListBody,
+    InteractiveListRow,
+    InteractiveListSection,
+    OutboundButtons,
+    OutboundList,
+    OutboundText,
+    OutboundTextBody,
+)
 
 META_API_VERSION: Final[str] = "v21.0"
 META_BASE_URL: Final[str] = f"https://graph.facebook.com/{META_API_VERSION}"
@@ -81,6 +93,96 @@ class MetaCloudClient:
             body_len=len(body),
         )
         return wamid
+
+    async def _post_message(
+        self, payload: dict[str, Any], log_event: str, **log_kwargs: Any
+    ) -> str:
+        """Shared POST + wamid extraction for any outbound message shape."""
+        r = await self._http.post(f"/{self._phone_id}/messages", json=payload)
+        if not r.is_success:
+            log.error(
+                "meta.send.failed",
+                event=log_event,
+                status=r.status_code,
+                body=r.text[:500],
+                phone_id=self._phone_id,
+            )
+        r.raise_for_status()
+        wamid: str = r.json()["messages"][0]["id"]
+        log.info(log_event, wamid=wamid, **log_kwargs)
+        return wamid
+
+    async def send_buttons(self, to: str, body: str, buttons: list[tuple[str, str]]) -> str:
+        """Send up to 3 quick-reply buttons.
+
+        ``buttons`` is a list of ``(id, title)`` tuples. ``id`` is what comes
+        back in the inbound webhook's ``interactive.button_reply.id`` when the
+        client taps; ``title`` is the label shown (max 20 chars).
+        """
+        if not 1 <= len(buttons) <= 3:
+            raise ValueError(f"send_buttons requires 1-3 buttons, got {len(buttons)}")
+        payload = OutboundButtons(
+            to=to,
+            interactive=InteractiveButtonBody(
+                body={"text": body},
+                action=InteractiveButtonAction(
+                    buttons=[
+                        InteractiveButton(reply={"id": bid, "title": title})
+                        for bid, title in buttons
+                    ]
+                ),
+            ),
+        ).model_dump(mode="json")
+        return await self._post_message(
+            payload,
+            "meta.send_buttons.ok",
+            to_hash=_hash_phone(to),
+            n_buttons=len(buttons),
+            body_len=len(body),
+        )
+
+    async def send_list(
+        self,
+        to: str,
+        body: str,
+        button_label: str,
+        rows: list[tuple[str, str, str | None]],
+        section_title: str | None = None,
+    ) -> str:
+        """Send an interactive list (up to 10 rows).
+
+        ``rows`` is a list of ``(id, title, description)`` tuples;
+        ``description`` may be None. ``button_label`` is the CTA shown to open
+        the list (max 20 chars). When the client picks a row the inbound
+        ``interactive.list_reply.id`` carries the row id.
+        """
+        if not 1 <= len(rows) <= 10:
+            raise ValueError(f"send_list requires 1-10 rows, got {len(rows)}")
+        payload = OutboundList(
+            to=to,
+            interactive=InteractiveListBody(
+                body={"text": body},
+                action=InteractiveListAction(
+                    button=button_label,
+                    sections=[
+                        InteractiveListSection(
+                            title=section_title,
+                            rows=[
+                                InteractiveListRow(id=rid, title=title, description=desc)
+                                for rid, title, desc in rows
+                            ],
+                        )
+                    ],
+                ),
+            ),
+        ).model_dump(mode="json", exclude_none=True)
+        return await self._post_message(
+            payload,
+            "meta.send_list.ok",
+            to_hash=_hash_phone(to),
+            n_rows=len(rows),
+            body_len=len(body),
+        )
 
     async def send_media_ack(self, to: str, media_type: str) -> str:
         """Send the media-acknowledgement echo (D-02 + CONTEXT Specifics).
