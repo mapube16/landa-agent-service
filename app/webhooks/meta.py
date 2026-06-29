@@ -92,23 +92,16 @@ def _log_task_error(task: asyncio.Task[Any]) -> None:
 
 
 def _extract_outbound(final_state: dict[str, Any]) -> str | None:
-    """Extract the message that should be sent to the client.
+    """Return the content of the most recent AIMessage in state.
 
-    Preference order:
-    1. The most recent AIMessage tagged ``send_to_client=True`` (judge-approved
-       conversation responses).
-    2. The most recent AIMessage without the tag (template messages like T-02,
-       T-03, T-06, T-07, T-08, the policy list, the identification ack).
-
+    Previous turns' approved AIMessages stay in the conversation history with
+    ``send_to_client=True``, so preferring tagged messages would re-send the
+    last approved answer when the current turn escalates. Just take the tail.
     HumanMessages are never returned — that's the user's own text.
     """
     from langchain_core.messages import AIMessage
 
-    messages = final_state.get("messages", [])
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and msg.additional_kwargs.get("send_to_client"):
-            return str(msg.content)
-    for msg in reversed(messages):
+    for msg in reversed(final_state.get("messages", [])):
         if isinstance(msg, AIMessage):
             content = str(msg.content)
             if content.strip():
