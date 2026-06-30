@@ -14,6 +14,7 @@ NEVER use ``os.getenv`` elsewhere in the codebase; import ``settings`` here.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -222,6 +223,66 @@ class ChatwootSettings(BaseSettings):
     # Without it, new conversations land in "Unassigned" and never show up in
     # the agent's mobile app inbox.
     default_assignee_id: int | None = None
+    # Phase 4 (D-15): shared secret for outbound webhook HMAC verification.
+    # Set in Chatwoot admin → Settings → Integrations → Webhooks.
+    webhook_secret: SecretStr  # REQUIRED (F4+) — CHATWOOT_WEBHOOK_SECRET
+
+
+class PaymentSettings(BaseSettings):
+    """Phase 4 payment flow settings (D-01, D-06, D-22).
+
+    ``cartera_phone_allowlist_raw`` is read via top-level env var name
+    ``CARTERA_PHONE_ALLOWLIST`` (not prefixed) because the operator stores it
+    without a prefix per D-06. The ``cartera_phone_allowlist`` property
+    parses it into a frozenset of E.164 strings.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="PAYMENT_",
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+        populate_by_name=True,
+    )
+
+    # Top-level env name (no prefix) — read via alias.
+    cartera_phone_allowlist_raw: str = Field(default="", alias="CARTERA_PHONE_ALLOWLIST")
+    # PAYMENT_VOLUME_PATH — path to Railway volume for comprobantes.
+    volume_path: Path = Field(default=Path("/data/comprobantes"))
+    # META_TEMPLATE_NO_ANSWER_NAME — template name for "no answer" flow (D-22).
+    template_no_answer_name: str = Field(
+        default="voice_no_answer_followup", alias="META_TEMPLATE_NO_ANSWER_NAME"
+    )
+
+    @property
+    def cartera_phone_allowlist(self) -> frozenset[str]:
+        """Parse CARTERA_PHONE_ALLOWLIST CSV into a frozenset of E.164 numbers.
+
+        Silently drops entries that don't start with '+' (not E.164).
+        """
+        raw = self.cartera_phone_allowlist_raw
+        if not raw:
+            return frozenset()
+        entries = (e.strip() for e in raw.split(","))
+        return frozenset(e for e in entries if e.startswith("+"))
+
+
+class LambdaProyectSettings(BaseSettings):
+    """Integration settings for the lambda-proyect voice agent (D-23).
+
+    ``internal_token`` is the shared secret authenticating requests from
+    lambda-proyect to ``POST /case/handoff/no_answer``.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="LAMBDA_PROYECT_",
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    base_url: str = "http://localhost:8001"
+    internal_token: SecretStr  # REQUIRED — LAMBDA_PROYECT_INTERNAL_TOKEN
 
 
 class SentrySettings(BaseSettings):
@@ -267,6 +328,9 @@ class Settings(BaseSettings):
     whatsapp: WhatsAppSettings = Field(default_factory=WhatsAppSettings)
     softseguros: SoftSegurosSettings = Field(default_factory=SoftSegurosSettings)
     chatwoot: ChatwootSettings = Field(default_factory=ChatwootSettings)
+    # Phase 4 (04-01): payment flow + lambda-proyect integration.
+    payment: PaymentSettings = Field(default_factory=PaymentSettings)
+    lambda_proyect: LambdaProyectSettings = Field(default_factory=LambdaProyectSettings)
 
 
 # Singleton — fail-fast at import time if a REQUIRED env var is missing.
@@ -277,8 +341,10 @@ __all__ = [
     "AppSettings",
     "ChatwootSettings",
     "LLMSettings",
+    "LambdaProyectSettings",
     "LangSmithSettings",
     "OpenRouterSettings",
+    "PaymentSettings",
     "PostgresSettings",
     "RedisSettings",
     "SentrySettings",

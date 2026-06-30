@@ -34,7 +34,9 @@ def test_payment_settings_empty_allowlist() -> None:
 
 
 def test_payment_settings_volume_path_default() -> None:
-    """volume_path defaults to /data/comprobantes."""
+    """volume_path defaults to /data/comprobantes (as a Path object)."""
+    from pathlib import Path
+
     os.environ.setdefault("CARTERA_PHONE_ALLOWLIST", "")
     os.environ["LAMBDA_PROYECT_INTERNAL_TOKEN"] = "x"
     os.environ["CHATWOOT_WEBHOOK_SECRET"] = "y"
@@ -43,7 +45,8 @@ def test_payment_settings_volume_path_default() -> None:
     from app.config.settings import PaymentSettings  # type: ignore[attr-defined]
 
     s = PaymentSettings()
-    assert str(s.volume_path) == "/data/comprobantes"
+    # Compare as Path objects — platform-independent.
+    assert s.volume_path == Path("/data/comprobantes")
 
 
 def test_payment_settings_template_name_default() -> None:
@@ -135,13 +138,14 @@ def test_qastate_node_literal_has_payment_nodes() -> None:
     """QAState.node Literal must include all 5 payment node names."""
     import typing
 
+    from app.features.qa import state as state_module
     from app.features.qa.state import QAState
 
-    node_annotation = QAState.__annotations__["node"]
-    # Unwrap NotRequired if needed
-    args = typing.get_args(node_annotation)
-    # The Literal can be nested inside NotRequired
-    # Collect all literal values recursively
+    # get_type_hints resolves ForwardRefs from `from __future__ import annotations`
+    hints = typing.get_type_hints(QAState, globalns=vars(state_module))
+    node_type = hints["node"]
+
+    # Collect all Literal string values recursively
     literal_values: set[str] = set()
 
     def _collect(tp: object) -> None:
@@ -151,11 +155,7 @@ def test_qastate_node_literal_has_payment_nodes() -> None:
             else:
                 _collect(a)
 
-    _collect(node_annotation)
-    # Also check direct args
-    for a in args:
-        if isinstance(a, str):
-            literal_values.add(a)
+    _collect(node_type)
 
     expected_payment_nodes = {
         "node_receive_comprobante",

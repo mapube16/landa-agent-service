@@ -29,6 +29,10 @@ os.environ.setdefault("CHATWOOT_URL", "https://chat-test.example.com")
 os.environ.setdefault("CHATWOOT_API_KEY", "cw-test-key")
 os.environ.setdefault("CHATWOOT_ACCOUNT_ID", "1")
 os.environ.setdefault("CHATWOOT_INBOX_ID", "2")
+os.environ.setdefault("CHATWOOT_WEBHOOK_SECRET", "test-cw-webhook-secret")
+# Phase 4 placeholders (D-06, D-22, D-23)
+os.environ.setdefault("CARTERA_PHONE_ALLOWLIST", "")
+os.environ.setdefault("LAMBDA_PROYECT_INTERNAL_TOKEN", "test-lambda-token")
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -63,6 +67,10 @@ def _test_env() -> None:
     os.environ.setdefault("CHATWOOT_API_KEY", "cw-test-key")
     os.environ.setdefault("CHATWOOT_ACCOUNT_ID", "1")
     os.environ.setdefault("CHATWOOT_INBOX_ID", "2")
+    os.environ.setdefault("CHATWOOT_WEBHOOK_SECRET", "test-cw-webhook-secret")
+    # Phase 4 placeholders (D-06, D-22, D-23). Values are dummy.
+    os.environ.setdefault("CARTERA_PHONE_ALLOWLIST", "")
+    os.environ.setdefault("LAMBDA_PROYECT_INTERNAL_TOKEN", "test-lambda-token")
 
 
 @pytest.fixture
