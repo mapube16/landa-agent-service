@@ -60,7 +60,12 @@ target-version = ["py312"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-exclude = ["alembic/versions/"]
+exclude = [
+    "alembic/versions/",
+    # Test files co-located with source in app/ (Phase 4 pattern).
+    # The main tests/ directory is not checked by mypy (not in its source set).
+    "app/.*/tests/",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
