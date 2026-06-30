@@ -24,12 +24,10 @@ from app.config.settings import settings
 
 # NOTE for future phases: import application models here so their tables
 # register on ``app.config.db.Base.metadata`` before alembic captures it.
-# Example (uncomment when models exist):
-#     from app.memory import case_store  # noqa: F401
-#     from app.security import audit_log  # noqa: F401
-# Phase 1 ships zero app models — the schema is empty on the SQLAlchemy
-# side; LangGraph checkpoint tables are managed under the psycopg connection
-# inside the migration body, not via ``Base``.
+# Phase 4 (04-01): cases + attachments tables.
+from app.memory import case_store  # noqa: F401
+
+# Phase 5 (future): from app.security import audit_log  # noqa: F401
 
 
 config = context.config
