@@ -161,6 +161,16 @@ Note: CONTEXT D-08 supersedes the Meta v18.0 wording above — the actual plans 
 
 **Out of scope this phase**: audit log inmutable con hash chain (logs operacionales OK), test suite adversarial completa, integración con voice agent (handoff recibido pero memoria L3/L4 no se carga todavía).
 
+
+**Plans** (finalized 2026-06-29 — see plans 04-01..04-08 in this directory for waves + dep graph):
+- [ ] `04-01-PLAN.md` — Schema migration 0002 + settings + QAState extensions + business_hours + output_firewall + module skeletons (Wave 1)
+- [ ] `04-02-PLAN.md` — MetaCloudClient upload_media / download_media / send_media / send_template + magic-byte validator (Wave 2)
+- [ ] `04-03-PLAN.md` — Chatwoot inverse index + POST /webhooks/chatwoot (HMAC + dedup + agent_bot filter + relay) (Wave 2)
+- [ ] `04-04-PLAN.md` — Payment subgraph + 5 nodes + storage + ARQ process_attachment + webhook comprobante branch (Wave 3)
+- [ ] `04-05-PLAN.md` — Cartera webhook routing branch + parse_button_id + resume_payment_interrupt (Wave 4)
+- [ ] `04-06-PLAN.md` — ARQ schedulers (reminder + escalate + cleanup) + cron registration + worker redeploy (Wave 4)
+- [ ] `04-07-PLAN.md` — POST /case/handoff/no_answer endpoint (bearer auth + UPSERT + template send) (Wave 4)
+- [ ] `04-08-PLAN.md` — Output firewall wired into outbound dispatch + E2E integration tests + live smoke checkpoint (Wave 5)
 ---
 
 ## Phase 5: Seguridad y audit log
