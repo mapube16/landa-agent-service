@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Final
 
 import httpx
@@ -59,9 +60,25 @@ def _hash_phone(phone: str) -> str:
 class MetaCloudClient:
     """Async client for the Meta Cloud API (``graph.facebook.com`` v21.0)."""
 
-    def __init__(self, http: httpx.AsyncClient, phone_id: str) -> None:
+    def __init__(self, http: httpx.AsyncClient, phone_id: str, token: str = "") -> None:
         self._http = http
         self._phone_id = phone_id
+        # Raw bearer token for CDN downloads (lookaside.fbsbx.com is outside
+        # the _http base URL, so the header must be re-sent manually).
+        # NEVER log this attribute.
+        self._token = token
+
+    async def upload_media(self, file_path: Path, mime_type: str) -> str:
+        """Upload a local file to Meta; return the ``media_id`` (D-03/D-18)."""
+        raise NotImplementedError
+
+    async def download_media(self, media_id: str) -> tuple[bytes, str]:
+        """Two-step media download; return ``(bytes, mime_type)`` (D-08)."""
+        raise NotImplementedError
+
+    async def _fetch_cdn(self, url: str) -> httpx.Response:
+        """GET the short-lived lookaside CDN URL with the bearer token."""
+        raise NotImplementedError
 
     async def send_text(self, to: str, body: str) -> str:
         """Send a text message; return the Meta ``wamid``.
