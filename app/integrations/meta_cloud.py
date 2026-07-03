@@ -262,6 +262,28 @@ class MetaCloudClient:
             body_len=len(body),
         )
 
+    async def send_media(
+        self,
+        to: str,
+        media_id: str,
+        media_type: str,
+        caption: str | None = None,
+        buttons: list[tuple[str, str]] | None = None,
+    ) -> str:
+        """Send an image/document by ``media_id``; return the ``wamid`` (D-18/D-04)."""
+        raise NotImplementedError
+
+    async def send_template(
+        self,
+        to: str,
+        template_name: str,
+        lang: str,
+        body_params: list[str],
+        quick_reply_payloads: list[str] | None = None,
+    ) -> str:
+        """Send a template message with body params + quick replies (D-19/20/21)."""
+        raise NotImplementedError
+
     async def send_media_ack(self, to: str, media_type: str) -> str:
         """Send the media-acknowledgement echo (D-02 + CONTEXT Specifics).
 

@@ -156,3 +156,161 @@ async def test_download_media_raises_on_cdn_error(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(httpx.HTTPStatusError):
         await client.download_media("MID1")
+
+
+# ---------------------------------------------------------------------------
+# send_media
+# ---------------------------------------------------------------------------
+
+
+def _wamid_response() -> httpx.Response:
+    return _json_response(
+        200,
+        {
+            "messaging_product": "whatsapp",
+            "contacts": [{"input": "16505551234", "wa_id": "16505551234"}],
+            "messages": [{"id": "wamid.MEDIA"}],
+        },
+    )
+
+
+async def test_send_media_image_no_buttons(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_client()
+    mock_post = AsyncMock(return_value=_wamid_response())
+    monkeypatch.setattr(client._http, "post", mock_post)
+
+    wamid = await client.send_media(
+        to="16505551234", media_id="MID", media_type="image", caption="comprobante"
+    )
+
+    assert wamid == "wamid.MEDIA"
+    _, kwargs = mock_post.call_args
+    payload = kwargs["json"]
+    assert payload["type"] == "image"
+    assert payload["image"]["id"] == "MID"
+    assert payload["image"]["caption"] == "comprobante"
+    assert payload["to"] == "16505551234"
+
+
+async def test_send_media_document_no_caption(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_client()
+    mock_post = AsyncMock(return_value=_wamid_response())
+    monkeypatch.setattr(client._http, "post", mock_post)
+
+    await client.send_media(to="16505551234", media_id="MID", media_type="document")
+
+    _, kwargs = mock_post.call_args
+    payload = kwargs["json"]
+    assert payload["type"] == "document"
+    assert payload["document"] == {"id": "MID"}
+    assert "caption" not in payload["document"]
+
+
+async def test_send_media_image_with_buttons_uses_interactive_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _make_client()
+    mock_post = AsyncMock(return_value=_wamid_response())
+    monkeypatch.setattr(client._http, "post", mock_post)
+
+    await client.send_media(
+        to="16505551234",
+        media_id="MID",
+        media_type="image",
+        caption="Comprobante poliza 123",
+        buttons=[("aprobar", "Aprobar"), ("rechazar", "Rechazar")],
+    )
+
+    _, kwargs = mock_post.call_args
+    payload = kwargs["json"]
+    assert payload["type"] == "interactive"
+    interactive = payload["interactive"]
+    assert interactive["type"] == "button"
+    assert interactive["header"]["type"] == "image"
+    assert interactive["header"]["image"]["id"] == "MID"
+    assert interactive["body"]["text"] == "Comprobante poliza 123"
+    btns = interactive["action"]["buttons"]
+    assert len(btns) == 2
+    assert btns[0] == {"type": "reply", "reply": {"id": "aprobar", "title": "Aprobar"}}
+    assert btns[1] == {"type": "reply", "reply": {"id": "rechazar", "title": "Rechazar"}}
+
+
+async def test_send_media_caps_buttons_at_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_client()
+    mock_post = AsyncMock(return_value=_wamid_response())
+    monkeypatch.setattr(client._http, "post", mock_post)
+
+    await client.send_media(
+        to="16505551234",
+        media_id="MID",
+        media_type="document",
+        buttons=[("a", "A"), ("b", "B"), ("c", "C"), ("d", "D")],
+    )
+
+    _, kwargs = mock_post.call_args
+    btns = kwargs["json"]["interactive"]["action"]["buttons"]
+    assert len(btns) == 3
+
+
+async def test_send_media_rejects_video() -> None:
+    client = _make_client()
+    with pytest.raises(ValueError, match="unsupported_media_type"):
+        await client.send_media(to="+1", media_id="X", media_type="video")
+
+
+# ---------------------------------------------------------------------------
+# send_template
+# ---------------------------------------------------------------------------
+
+
+async def test_send_template_no_answer_followup(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_client()
+    mock_post = AsyncMock(return_value=_wamid_response())
+    monkeypatch.setattr(client._http, "post", mock_post)
+
+    wamid = await client.send_template(
+        to="16505551234",
+        template_name="voice_no_answer_followup",
+        lang="es",
+        body_params=["Juan", "123"],
+        quick_reply_payloads=["si_ayudenme", "mas_tarde"],
+    )
+
+    assert wamid == "wamid.MEDIA"
+    _, kwargs = mock_post.call_args
+    payload = kwargs["json"]
+    assert payload["type"] == "template"
+    template = payload["template"]
+    assert template["name"] == "voice_no_answer_followup"
+    assert template["language"] == {"code": "es"}
+    components = template["components"]
+    body_components = [c for c in components if c["type"] == "body"]
+    button_components = [c for c in components if c["type"] == "button"]
+    assert len(body_components) == 1
+    assert body_components[0]["parameters"] == [
+        {"type": "text", "text": "Juan"},
+        {"type": "text", "text": "123"},
+    ]
+    assert len(button_components) == 2
+    assert button_components[0]["sub_type"] == "quick_reply"
+    assert button_components[0]["index"] == "0"
+    assert button_components[0]["parameters"] == [{"type": "payload", "payload": "si_ayudenme"}]
+    assert button_components[1]["index"] == "1"
+    assert button_components[1]["parameters"] == [{"type": "payload", "payload": "mas_tarde"}]
+
+
+async def test_send_template_without_quick_replies(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_client()
+    mock_post = AsyncMock(return_value=_wamid_response())
+    monkeypatch.setattr(client._http, "post", mock_post)
+
+    await client.send_template(
+        to="16505551234",
+        template_name="voice_no_answer_followup",
+        lang="es",
+        body_params=["Juan"],
+    )
+
+    _, kwargs = mock_post.call_args
+    components = kwargs["json"]["template"]["components"]
+    assert [c["type"] for c in components] == ["body"]
