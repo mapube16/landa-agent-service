@@ -10,3 +10,12 @@ from __future__ import annotations
 from typing import Final
 
 ATTACHMENT_MAX_BYTES: Final[int] = 5 * 1024 * 1024  # 5 MB per D-25
+
+ALLOWED_MIME_TYPES: Final[frozenset[str]] = frozenset(
+    {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+)  # D-24
+
+
+def validate_magic_bytes(first_chunk: bytes, declared_mime: str) -> bool:
+    """Return True iff ``first_chunk`` matches the declared (allowed) mime."""
+    raise NotImplementedError
