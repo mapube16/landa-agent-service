@@ -270,8 +270,51 @@ class MetaCloudClient:
         caption: str | None = None,
         buttons: list[tuple[str, str]] | None = None,
     ) -> str:
-        """Send an image/document by ``media_id``; return the ``wamid`` (D-18/D-04)."""
-        raise NotImplementedError
+        """Send an image/document by ``media_id``; return the ``wamid`` (D-18/D-04).
+
+        Without ``buttons``: plain media payload with optional caption. With
+        ``buttons`` (list of ``(id, title)`` tuples, capped at 3 per Meta
+        interactive spec): an ``interactive`` payload whose header carries
+        the media and whose body carries the caption.
+        """
+        if media_type not in ("image", "document"):
+            raise ValueError("unsupported_media_type")
+        payload: dict[str, Any]
+        if buttons is None:
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": to,
+                "type": media_type,
+                media_type: {"id": media_id},
+            }
+            if caption:
+                payload[media_type]["caption"] = caption
+        else:
+            payload = {
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": to,
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "header": {"type": media_type, media_type: {"id": media_id}},
+                    "body": {"text": caption or ""},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": bid, "title": btitle}}
+                            for bid, btitle in buttons[:3]
+                        ]
+                    },
+                },
+            }
+        return await self._post_message(
+            payload,
+            "meta.send_media",
+            to_hash=_hash_phone(to),
+            media_id=media_id,
+            with_buttons=bool(buttons),
+        )
 
     async def send_template(
         self,
@@ -281,8 +324,43 @@ class MetaCloudClient:
         body_params: list[str],
         quick_reply_payloads: list[str] | None = None,
     ) -> str:
-        """Send a template message with body params + quick replies (D-19/20/21)."""
-        raise NotImplementedError
+        """Send a template message with body params + quick replies (D-19/20/21).
+
+        Payload shape per RESEARCH "Template message shape": one ``body``
+        component with text parameters plus one indexed ``quick_reply``
+        button component per payload string. Quick-reply taps come back as
+        ``interactive.button_reply.id`` carrying the payload value.
+        """
+        body_component: dict[str, Any] = {
+            "type": "body",
+            "parameters": [{"type": "text", "text": p} for p in body_params],
+        }
+        button_components: list[dict[str, Any]] = [
+            {
+                "type": "button",
+                "sub_type": "quick_reply",
+                "index": str(idx),
+                "parameters": [{"type": "payload", "payload": qr}],
+            }
+            for idx, qr in enumerate(quick_reply_payloads or [])
+        ]
+        payload: dict[str, Any] = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": lang},
+                "components": [body_component, *button_components],
+            },
+        }
+        return await self._post_message(
+            payload,
+            "meta.send_template",
+            to_hash=_hash_phone(to),
+            template=template_name,
+            lang=lang,
+        )
 
     async def send_media_ack(self, to: str, media_type: str) -> str:
         """Send the media-acknowledgement echo (D-02 + CONTEXT Specifics).
