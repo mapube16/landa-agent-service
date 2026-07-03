@@ -58,6 +58,7 @@ from app.integrations.openrouter import get_llm  # noqa: E402
 from app.integrations.softseguros import get_softseguros_client  # noqa: E402
 from app.security.kb_auditor import audit_kb  # noqa: E402
 from app.webhooks.chatwoot import router as chatwoot_webhook_router  # noqa: E402
+from app.webhooks.handoff import router as handoff_router  # noqa: E402
 from app.webhooks.meta import router as meta_router  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -189,6 +190,7 @@ async def bind_correlation_to_structlog(request: Request, call_next: Any) -> Any
 app.include_router(health_router)
 app.include_router(meta_router)
 app.include_router(chatwoot_webhook_router)
+app.include_router(handoff_router)
 
 
 @app.post("/test/llm")
