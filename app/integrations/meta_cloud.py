@@ -24,10 +24,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
 
+import anyio
 import httpx
 import structlog
 
 from app.config.settings import settings
+from app.features.payment.attachment import ATTACHMENT_MAX_BYTES
 from app.models.meta import (
     InteractiveButton,
     InteractiveButtonAction,
@@ -69,16 +71,75 @@ class MetaCloudClient:
         self._token = token
 
     async def upload_media(self, file_path: Path, mime_type: str) -> str:
-        """Upload a local file to Meta; return the ``media_id`` (D-03/D-18)."""
-        raise NotImplementedError
+        """Upload a local file to Meta; return the ``media_id`` (D-03/D-18).
+
+        POSTs multipart to ``/{phone_id}/media``. Raises
+        ``httpx.HTTPStatusError`` on 4xx/5xx (same contract as the other
+        outbound methods).
+        """
+        # anyio (transitive dep of httpx/starlette) keeps file I/O off the
+        # event loop (ruff ASYNC230/240). Files are capped at 5 MB (D-25),
+        # so reading fully into memory is fine.
+        content = await anyio.Path(file_path).read_bytes()
+        r = await self._http.post(
+            f"/{self._phone_id}/media",
+            files={"file": (file_path.name, content, mime_type)},
+            data={"messaging_product": "whatsapp", "type": mime_type},
+        )
+        if not r.is_success:
+            log.error(
+                "meta.upload_media.failed",
+                status=r.status_code,
+                body=r.text[:500],
+                phone_id=self._phone_id,
+            )
+        r.raise_for_status()
+        media_id: str = r.json()["id"]
+        log.info(
+            "meta.media_uploaded",
+            media_id=media_id,
+            mime=mime_type,
+            size=len(content),
+        )
+        return media_id
 
     async def download_media(self, media_id: str) -> tuple[bytes, str]:
-        """Two-step media download; return ``(bytes, mime_type)`` (D-08)."""
-        raise NotImplementedError
+        """Two-step media download; return ``(bytes, mime_type)`` (D-08).
+
+        Step 1: GET ``/{media_id}`` on the graph API for the short-lived CDN
+        URL + metadata. The ``file_size`` gate fires BEFORE the binary GET so
+        oversize attachments never consume download bandwidth (D-25).
+        Step 2: GET the CDN URL (``lookaside.fbsbx.com``) via
+        :meth:`_fetch_cdn`.
+        """
+        r1 = await self._http.get(f"/{media_id}")
+        r1.raise_for_status()
+        meta = r1.json()
+        url: str = meta["url"]
+        mime_type: str = meta["mime_type"]
+        file_size = int(meta.get("file_size", 0))
+        if file_size > ATTACHMENT_MAX_BYTES:
+            raise ValueError("attachment_too_large")
+        r2 = await self._fetch_cdn(url)
+        r2.raise_for_status()
+        data: bytes = r2.content
+        log.info(
+            "meta.media_downloaded",
+            media_id=media_id,
+            mime=mime_type,
+            size=len(data),
+        )
+        return (data, mime_type)
 
     async def _fetch_cdn(self, url: str) -> httpx.Response:
-        """GET the short-lived lookaside CDN URL with the bearer token."""
-        raise NotImplementedError
+        """GET the short-lived lookaside CDN URL with the bearer token.
+
+        Meta media URLs live on ``lookaside.fbsbx.com``, NOT the
+        ``graph.facebook.com`` base URL that ``self._http`` is bound to, so
+        a one-shot client is used and the bearer token is re-sent manually.
+        """
+        async with httpx.AsyncClient(timeout=self._http.timeout) as cdn:
+            return await cdn.get(url, headers={"Authorization": f"Bearer {self._token}"})
 
     async def send_text(self, to: str, body: str) -> str:
         """Send a text message; return the Meta ``wamid``.
@@ -231,13 +292,14 @@ def get_meta_client() -> MetaCloudClient:
         keepalive_expiry=30.0,
     )
     timeout = httpx.Timeout(10.0, connect=3.0, read=10.0, write=3.0, pool=2.0)
+    token = settings.whatsapp.token.get_secret_value()
     http = httpx.AsyncClient(
         base_url=META_BASE_URL,
-        headers={"Authorization": f"Bearer {settings.whatsapp.token.get_secret_value()}"},
+        headers={"Authorization": f"Bearer {token}"},
         timeout=timeout,
         limits=limits,
     )
-    return MetaCloudClient(http=http, phone_id=settings.whatsapp.phone_id)
+    return MetaCloudClient(http=http, phone_id=settings.whatsapp.phone_id, token=token)
 
 
 __all__ = [
