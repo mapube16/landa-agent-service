@@ -131,27 +131,71 @@ class ChatwootClient:
                 log.info("chatwoot.conv.created", phone_hash=phone_hash, conv_id=conv_id)
 
             await self._cache_set(cache_key, conv_id, ttl=604800)  # 7 days
+            # Inverse index (D-16, Plan 04-03): the Chatwoot outbound webhook
+            # resolves conv_id -> phone through this key to relay agent
+            # messages back to the client via Meta Cloud API.
+            await self._cache_set_raw(
+                f"chatwoot:phone_by_conv:{conv_id}".encode(), phone.encode(), ttl=604800
+            )
             return conv_id
         finally:
             await self._release_lock(lock_key)
 
+    async def get_phone_by_conv(self, conv_id: int) -> str | None:
+        """Resolve ``conv_id`` to the client's phone (D-16, Plan 04-03).
+
+        Redis-first via ``chatwoot:phone_by_conv:{conv_id}``; falls back to
+        ``GET /conversations/{conv_id}`` parsing ``meta.sender.phone_number``
+        (Chatwoot v3). Repopulates the cache on fallback success. Returns
+        None when both Redis and the API yield nothing (never raises).
+        """
+        key = f"chatwoot:phone_by_conv:{conv_id}".encode()
+        raw = await self._cache_get_raw(key)
+        if raw is not None:
+            return raw.decode()
+
+        path = f"/api/v1/accounts/{self._account_id}/conversations/{conv_id}"
+        try:
+            r = await self._http.get(path)
+            r.raise_for_status()
+        except httpx.HTTPError as exc:
+            log.warning(
+                "chatwoot.phone_by_conv.api_failed",
+                conv_id=conv_id,
+                error_type=type(exc).__name__,
+            )
+            return None
+        phone = ((r.json().get("meta") or {}).get("sender") or {}).get("phone_number")
+        if not phone:
+            log.warning("chatwoot.phone_by_conv.not_found", conv_id=conv_id)
+            return None
+        await self._cache_set_raw(key, str(phone).encode(), ttl=604800)
+        return str(phone)
+
     # -- Redis lock + cache helpers ------------------------------------------
 
     async def _cache_get(self, key: bytes) -> int | None:
+        raw = await self._cache_get_raw(key)
+        return int(raw.decode()) if raw is not None else None
+
+    async def _cache_get_raw(self, key: bytes) -> bytes | None:
         if self._redis is None:
             return None
         try:
-            raw = await self._redis.get(key)
+            raw: bytes | None = await self._redis.get(key)
         except Exception as exc:  # noqa: BLE001 — bypass-on-cache-down
             log.warning("chatwoot.cache.read_error", error_type=type(exc).__name__)
             return None
-        return int(raw.decode()) if raw is not None else None
+        return raw
 
     async def _cache_set(self, key: bytes, conv_id: int, ttl: int) -> None:
+        await self._cache_set_raw(key, str(conv_id).encode(), ttl)
+
+    async def _cache_set_raw(self, key: bytes, value: bytes, ttl: int) -> None:
         if self._redis is None:
             return
         try:
-            await self._redis.set(key, str(conv_id).encode(), ex=ttl)
+            await self._redis.set(key, value, ex=ttl)
         except Exception as exc:  # noqa: BLE001
             log.warning("chatwoot.cache.write_error", error_type=type(exc).__name__)
 
