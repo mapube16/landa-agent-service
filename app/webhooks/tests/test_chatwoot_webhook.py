@@ -62,7 +62,7 @@ def mocks() -> tuple[MagicMock, MagicMock, MagicMock]:
 async def client(mocks: tuple[MagicMock, MagicMock, MagicMock]) -> AsyncIterator[AsyncClient]:
     from fastapi import FastAPI
 
-    from app.webhooks.chatwoot import router  # type: ignore[import-not-found]
+    from app.webhooks.chatwoot import router
 
     app = FastAPI()
     app.include_router(router)

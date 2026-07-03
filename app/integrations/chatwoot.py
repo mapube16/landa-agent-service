@@ -318,6 +318,18 @@ class ChatwootClient:
         # {"id": <int>, "inbox_id": ..., "status": "open", ...}
         return int(r.json()["id"])
 
+    async def download_attachment(self, data_url: str) -> bytes:
+        """Download an agent-uploaded attachment blob from Chatwoot (Plan 04-03).
+
+        ``data_url`` must be a Chatwoot-hosted absolute URL — the webhook
+        validates the host BEFORE calling (T-04-03-05). Uses the shared
+        ``_http`` client so the ``api_access_token`` header authenticates
+        the blob request.
+        """
+        r = await self._http.get(data_url)
+        r.raise_for_status()
+        return bytes(r.content)
+
     async def mark_resolved(self, conversation_id: int) -> None:
         """Mark a Chatwoot conversation as resolved.
 
