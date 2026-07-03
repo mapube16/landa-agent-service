@@ -141,12 +141,15 @@ async def test_get_or_create_conversation_cache_miss_creates_contact_and_convers
     assert result == 42
     # Two POST calls: contacts + conversations
     assert stub_http.post.await_count == 2
-    # Cache write happened with 7-day TTL (lock acquire also calls SET with NX/EX=15;
-    # find the actual conversation-cache write among the calls).
+    # Cache writes with 7-day TTL (lock acquire also calls SET with NX/EX=15;
+    # find the actual cache writes among the calls). Since Plan 04-03 there
+    # are two: forward chatwoot:conv:{phone_hash} + inverse phone_by_conv.
     cache_writes = [
         call for call in stub_redis.set.call_args_list if call.kwargs.get("ex") == 604800
     ]
-    assert len(cache_writes) == 1
+    assert len(cache_writes) == 2
+    written_keys = {call.args[0] for call in cache_writes}
+    assert b"chatwoot:phone_by_conv:42" in written_keys
 
 
 # ---------------------------------------------------------------------------
