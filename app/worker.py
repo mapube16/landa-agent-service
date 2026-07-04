@@ -136,6 +136,16 @@ async def process_attachment(
     # ponytail: local imports keep cold-start light + avoid circular deps.
     from app.config.checkpointer import build_checkpointer_cm
     from app.features.qa.graph import build_qa_graph
+    from app.security import audit_log
+
+    # SEC-04: Capture attachment_received audit event before any graph work so
+    # every inbound comprobante is recorded even if the graph subsequently fails.
+    audit_log.emit_task(
+        action="attachment_received",
+        actor="worker",
+        conversation_id=phone,
+        payload={"media_id": media_id, "mime_type": mime_type, "wamid": wamid},
+    )
 
     # Try to reuse a graph already compiled in the worker lifespan.
     # If not available (worker deployed before lifespan wires it), build fresh.
@@ -189,13 +199,81 @@ async def process_attachment(
     await graph.ainvoke(None, config=config)
 
 
+async def verify_audit_chain(ctx: dict[str, Any]) -> None:
+    """Daily cron (03:00 UTC): verify the full audit log hash chain.
+
+    On mismatch, logs audit_log.chain_tampered at error level so the Sentry
+    structlog integration captures it as an alert (ROADMAP Phase 7, key event).
+
+    Fail-open: any exception (DB down, missing table, import error) is logged
+    and swallowed -- the worker never crashes on a chain-check failure.
+    """
+    import structlog as _structlog
+
+    _log = _structlog.get_logger("worker.verify_audit_chain")
+    try:
+        # Pitfall 5: resolve session_factory from app.state (wired in on_startup).
+        from app.main import app as _app
+        from app.security.audit_log import verify_chain
+
+        sf = getattr(_app.state, "session_factory", None)
+        if sf is None:
+            _log.warning("worker.verify_audit_chain.no_session_factory")
+            return
+
+        ok, bad_id = await verify_chain(sf)
+        if ok:
+            _log.info("audit_log.chain_verified")
+        else:
+            # Error level ensures Sentry capture via structlog/sentry pipeline.
+            _log.error("audit_log.chain_tampered", first_bad_id=bad_id)
+    except Exception as exc:
+        _log.error(
+            "worker.verify_audit_chain.error",
+            error_type=type(exc).__name__,
+        )
+
+
+async def sink_audit_log(ctx: dict[str, Any]) -> None:
+    """Daily cron (03:30 UTC): append new audit rows to the Railway volume NDJSON sink.
+
+    Respects settings.audit.sink_enabled -- returns immediately if False.
+    Fail-open: any exception is logged and swallowed.
+    """
+    import structlog as _structlog
+
+    from app.config.settings import settings as _settings
+
+    _log = _structlog.get_logger("worker.sink_audit_log")
+
+    if not _settings.audit.sink_enabled:
+        return
+
+    try:
+        from app.main import app as _app
+        from app.security.audit_sink import export_audit_ndjson
+
+        sf = getattr(_app.state, "session_factory", None)
+        if sf is None:
+            _log.warning("worker.sink_audit_log.no_session_factory")
+            return
+
+        count = await export_audit_ndjson(sf, _settings.audit.sink_path)
+        _log.info("worker.sink_audit_log.done", exported=count)
+    except Exception as exc:
+        _log.error(
+            "worker.sink_audit_log.error",
+            error_type=type(exc).__name__,
+        )
+
+
 class WorkerSettings:
     """ARQ worker configuration.
 
     F3: Chatwoot mirror jobs (incoming + outgoing).
     F4: Payment comprobante async processing (process_attachment).
     F6: Business-hours-aware timer scheduler + 90-day attachment cleanup.
-    F5: audit log fan-out, rate-limit token resets.
+    F5 (DONE, 05-05): verify_audit_chain + sink_audit_log daily audit crons.
     """
 
     functions: list[Any] = [
@@ -204,18 +282,22 @@ class WorkerSettings:
         process_attachment,
         check_pending_cases,
         cleanup_attachments_90d,
+        verify_audit_chain,
+        sink_audit_log,
     ]
 
-    # cron_jobs — two scheduled jobs (Plan 04-06):
+    # cron_jobs -- four scheduled jobs:
     #   check_pending_cases: every minute during business hours (D-10/D-11/D-12).
     #     minute=set(range(60)) is ARQ's "every minute of every hour" form.
-    #     The job itself bails immediately if outside business hours, so the
-    #     frequent schedule has negligible overhead off-hours.
-    #   cleanup_attachments_90d: daily at 02:00 UTC (21:00 Bogota Sunday),
-    #     low-traffic window to minimise DB contention (D-02).
+    #     The job itself bails immediately if outside business hours.
+    #   cleanup_attachments_90d: daily at 02:00 UTC (21:00 Bogota Sunday).
+    #   verify_audit_chain: daily at 03:00 UTC -- off-peak, after cleanup.
+    #   sink_audit_log: daily at 03:30 UTC -- after the chain verifier.
     cron_jobs: list[Any] = [
         cron(check_pending_cases, minute=set(range(60))),
         cron(cleanup_attachments_90d, hour={2}, minute={0}),
+        cron(verify_audit_chain, hour={3}, minute={0}),
+        cron(sink_audit_log, hour={3}, minute={30}),
     ]
 
     redis_settings: RedisSettings = RedisSettings.from_dsn(settings.redis.url.get_secret_value())
