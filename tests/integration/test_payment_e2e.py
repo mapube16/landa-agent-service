@@ -192,9 +192,9 @@ async def test_happy_path_approve(
             # Either way, meta.send_text is NOT called with payment text at this point.
             for call in meta_mock.send_text.call_args_list:
                 body_sent = call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")
-                assert "confirmado" not in body_sent.lower(), (
-                    "Payment confirmation must not be sent without cartera approval"
-                )
+                assert (
+                    "confirmado" not in body_sent.lower()
+                ), "Payment confirmation must not be sent without cartera approval"
 
             # Step B: Simulate cartera taps "aprobar".
             # Patch handle_cartera_message to call _run_and_dispatch directly
@@ -232,9 +232,8 @@ async def test_happy_path_approve(
     confirmed_calls = [
         call
         for call in meta_mock.send_text.call_args_list
-        if "confirmado" in (
-            call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")
-        ).lower()
+        if "confirmado"
+        in (call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")).lower()
     ]
     assert confirmed_calls, "Client must receive the payment confirmation text"
 
@@ -320,9 +319,9 @@ async def test_reject_path_escalates(
         call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")
         for call in meta_mock.send_text.call_args_list
     ]
-    assert any("agente" in b.lower() for b in sent_bodies), (
-        f"Client must receive escalation D-12 message, got: {sent_bodies}"
-    )
+    assert any(
+        "agente" in b.lower() for b in sent_bodies
+    ), f"Client must receive escalation D-12 message, got: {sent_bodies}"
 
     # Chatwoot conversation opened for human escalation.
     chatwoot_mock.get_or_create_conversation.assert_called()
@@ -378,9 +377,9 @@ async def test_spoofed_cartera_number_silently_dropped(
 
     # ARQ not enqueued for this unknown sender.
     for call in arq_mock.enqueue_job.call_args_list:
-        assert call.args[0] != "process_attachment", (
-            "process_attachment must not be enqueued for unknown sender"
-        )
+        assert (
+            call.args[0] != "process_attachment"
+        ), "process_attachment must not be enqueued for unknown sender"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -490,9 +489,9 @@ async def test_handoff_no_answer_dispatches_template(
         assert r2.status_code == 200
         data2 = r2.json()
         assert data2["sent"] is False
-        assert meta_mock.send_template.call_count == 1, (
-            "Template must NOT be sent a second time (idempotency)"
-        )
+        assert (
+            meta_mock.send_template.call_count == 1
+        ), "Template must NOT be sent a second time (idempotency)"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -571,19 +570,17 @@ async def test_output_firewall_blocks_hallucinated_confirmation(
     # The hallucinated text must NOT have been sent to the client.
     for call in meta_mock.send_text.call_args_list:
         body_sent = call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")
-        assert "pago fue confirmado" not in body_sent.lower(), (
-            f"Firewall should have blocked the hallucination, but got: {body_sent!r}"
-        )
+        assert (
+            "pago fue confirmado" not in body_sent.lower()
+        ), f"Firewall should have blocked the hallucination, but got: {body_sent!r}"
 
     # The escalation substitute MUST have been sent.
     assert meta_mock.send_text.called, "Escalation substitute must be sent"
     any_escalation = any(
-        "agente" in (
-            call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")
-        ).lower()
-        or "validacion" in (
-            call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")
-        ).lower()
+        "agente"
+        in (call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")).lower()
+        or "validacion"
+        in (call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")).lower()
         for call in meta_mock.send_text.call_args_list
     )
     assert any_escalation, "Escalation substitute message must mention 'agente' or 'validacion'"
@@ -596,14 +593,14 @@ async def test_output_firewall_blocks_hallucinated_confirmation(
         str(call.args[1] if len(call.args) > 1 else call.kwargs.get("content", ""))
         for call in chatwoot_note_calls
     )
-    assert "output_firewall" in note_text.lower() or "payment_blocked" in note_text.lower(), (
-        f"Chatwoot note must mention output_firewall.payment_blocked, got: {note_text!r}"
-    )
+    assert (
+        "output_firewall" in note_text.lower() or "payment_blocked" in note_text.lower()
+    ), f"Chatwoot note must mention output_firewall.payment_blocked, got: {note_text!r}"
 
     # Mirror_outbound must NOT be enqueued with the blocked text.
     for call in arq_mock.enqueue_job.call_args_list:
         if call.args and call.args[0] == "mirror_outbound":
             job_text = call.kwargs.get("text") or ""
-            assert "pago fue confirmado" not in job_text.lower(), (
-                f"Blocked text must not be enqueued to mirror: {job_text!r}"
-            )
+            assert (
+                "pago fue confirmado" not in job_text.lower()
+            ), f"Blocked text must not be enqueued to mirror: {job_text!r}"

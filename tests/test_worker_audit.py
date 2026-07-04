@@ -16,10 +16,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -146,7 +145,10 @@ async def test_verify_audit_chain_ok_logs_info(
 async def test_verify_audit_chain_tampered_logs_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """verify_audit_chain with chain tampered -> log.error('audit_log.chain_tampered', first_bad_id=42)."""
+    """verify_audit_chain on a tampered chain logs error audit_log.chain_tampered.
+
+    Expected: log.error('audit_log.chain_tampered', first_bad_id=42).
+    """
     from app.worker import verify_audit_chain
 
     fake_sf = MagicMock()
@@ -236,8 +238,8 @@ async def test_export_audit_ndjson_writes_partitioned_files(
     assert file_d1.exists(), "Expected 2026-07-01.ndjson"
     assert file_d2.exists(), "Expected 2026-07-02.ndjson"
 
-    lines_d1 = [json.loads(l) for l in file_d1.read_text().splitlines() if l]
-    lines_d2 = [json.loads(l) for l in file_d2.read_text().splitlines() if l]
+    lines_d1 = [json.loads(ln) for ln in file_d1.read_text().splitlines() if ln]
+    lines_d2 = [json.loads(ln) for ln in file_d2.read_text().splitlines() if ln]
     assert len(lines_d1) == 2
     assert len(lines_d2) == 1
 
@@ -284,10 +286,10 @@ async def test_export_audit_ndjson_idempotent_second_run(
 @pytest.mark.asyncio
 async def test_export_audit_ndjson_unwritable_dir_returns_zero() -> None:
     """Unwritable sink_dir -> logs audit_sink.write_failed, returns 0, no exception."""
-    from app.security.audit_sink import export_audit_ndjson
-
     # Use a path that is a FILE (not a dir) to trigger a write error
     import tempfile
+
+    from app.security.audit_sink import export_audit_ndjson
 
     with tempfile.NamedTemporaryFile(delete=False) as f:
         bad_path = Path(f.name)

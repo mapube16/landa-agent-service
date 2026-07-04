@@ -28,8 +28,9 @@ jobs:
         run: uv sync --frozen
       - name: ruff check
         run: uv run ruff check .
-      - name: ruff format check
-        run: uv run ruff format --check .
+      # black is the single formatter of record (CLAUDE.md quick-start + [tool.black]).
+      # `ruff format` was removed from CI: it disagrees with black on ~12 files, so
+      # keeping both made a green build impossible. ruff stays for linting only.
       - name: black check
         run: uv run black --check .
       - name: mypy

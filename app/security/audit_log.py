@@ -148,18 +148,14 @@ async def emit(
             # Advance the sequence to get the next id deterministically.
             next_id: int = (
                 await session.execute(
-                    sa_text(
-                        "SELECT nextval(pg_get_serial_sequence('audit_log', 'id'))"
-                    )
+                    sa_text("SELECT nextval(pg_get_serial_sequence('audit_log', 'id'))")
                 )
             ).scalar_one()
 
             # Fetch the most recent entry_hash for chaining.
             prev_hash: str = (
                 await session.execute(
-                    sa_text(
-                        "SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1"
-                    )
+                    sa_text("SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1")
                 )
             ).scalar() or ""
 
@@ -188,9 +184,7 @@ async def emit(
                 payload_hash=payload_hash,
                 prev_hash=prev_hash,
                 entry_hash=entry_hash,
-                metadata_json=(
-                    orjson.dumps(metadata).decode() if metadata is not None else None
-                ),
+                metadata_json=(orjson.dumps(metadata).decode() if metadata is not None else None),
             )
             session.add(row)
 
@@ -320,9 +314,7 @@ async def verify_chain(
         from sqlalchemy import select
 
         async with session_scope(session_factory) as session:
-            result = await session.execute(
-                select(AuditLog).order_by(AuditLog.id.asc())
-            )
+            result = await session.execute(select(AuditLog).order_by(AuditLog.id.asc()))
             rows = result.scalars().all()
             return verify_chain_rows(rows)
     except Exception as exc:

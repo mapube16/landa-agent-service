@@ -129,9 +129,10 @@ class TestSendOutboundFirewallWiring:
 
     async def test_send_outbound_blocks_payment_text_without_flag(self) -> None:
         """Payment text without payment_approved=True is blocked; escalation sent instead."""
-        import pytest
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
+
         from langchain_core.messages import AIMessage
+
         from app.webhooks.meta import _send_outbound
 
         meta_mock = AsyncMock()
@@ -153,9 +154,9 @@ class TestSendOutboundFirewallWiring:
         # The ORIGINAL payment text must NOT have been sent.
         for call in meta_mock.send_text.call_args_list:
             body = call.kwargs.get("body") or (call.args[1] if len(call.args) > 1 else "")
-            assert "pago fue confirmado" not in body.lower(), (
-                f"Firewall should have blocked the original text, but got: {body!r}"
-            )
+            assert (
+                "pago fue confirmado" not in body.lower()
+            ), f"Firewall should have blocked the original text, but got: {body!r}"
 
         # The escalation substitute MUST have been sent.
         assert meta_mock.send_text.called, "Escalation substitute should have been sent"
@@ -163,9 +164,9 @@ class TestSendOutboundFirewallWiring:
             meta_mock.send_text.call_args.kwargs.get("body")
             or meta_mock.send_text.call_args.args[1]
         )
-        assert "agente" in sent_body.lower() or "validacion" in sent_body.lower(), (
-            f"Expected escalation substitute message, got: {sent_body!r}"
-        )
+        assert (
+            "agente" in sent_body.lower() or "validacion" in sent_body.lower()
+        ), f"Expected escalation substitute message, got: {sent_body!r}"
 
         # Chatwoot escalation must have been triggered.
         assert chatwoot_mock.get_or_create_conversation.called or chatwoot_mock.post_message.called
@@ -173,14 +174,16 @@ class TestSendOutboundFirewallWiring:
         # ARQ mirror must NOT have been enqueued with the blocked text.
         for call in arq_mock.enqueue_job.call_args_list:
             job_text = call.kwargs.get("text") or ""
-            assert "pago fue confirmado" not in job_text.lower(), (
-                f"Blocked text must not be enqueued to mirror: {job_text!r}"
-            )
+            assert (
+                "pago fue confirmado" not in job_text.lower()
+            ), f"Blocked text must not be enqueued to mirror: {job_text!r}"
 
     async def test_send_outbound_allows_payment_text_with_flag(self) -> None:
         """Payment text with payment_approved=True passes through unchanged."""
         from unittest.mock import AsyncMock
+
         from langchain_core.messages import AIMessage
+
         from app.webhooks.meta import _send_outbound
 
         meta_mock = AsyncMock()
@@ -201,14 +204,16 @@ class TestSendOutboundFirewallWiring:
             meta_mock.send_text.call_args.kwargs.get("body")
             or meta_mock.send_text.call_args.args[1]
         )
-        assert "confirmado" in sent_body.lower(), (
-            f"Expected original payment text, got: {sent_body!r}"
-        )
+        assert (
+            "confirmado" in sent_body.lower()
+        ), f"Expected original payment text, got: {sent_body!r}"
 
     async def test_send_outbound_unrelated_text_passes_through(self) -> None:
         """Unrelated text (no payment pattern) is sent as-is."""
         from unittest.mock import AsyncMock
+
         from langchain_core.messages import AIMessage
+
         from app.webhooks.meta import _send_outbound
 
         meta_mock = AsyncMock()

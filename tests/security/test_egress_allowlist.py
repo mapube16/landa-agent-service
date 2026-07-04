@@ -113,9 +113,10 @@ def test_no_hardcoded_external_host_outside_allowlist() -> None:
                         f"(url={match.group(0)!r})"
                     )
 
-    assert not violations, (
-        f"Found {len(violations)} hardcoded URL(s) outside ALLOWED_EGRESS_HOSTS:\n"
-        + "\n".join(f"  {v}" for v in violations)
+    assert (
+        not violations
+    ), f"Found {len(violations)} hardcoded URL(s) outside ALLOWED_EGRESS_HOSTS:\n" + "\n".join(
+        f"  {v}" for v in violations
     )
 
 

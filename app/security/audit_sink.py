@@ -70,9 +70,7 @@ async def export_audit_ndjson(
 
         async with session_factory() as session:
             result = await session.execute(
-                select(AuditLog)
-                .where(AuditLog.id > cursor)
-                .order_by(AuditLog.id.asc())
+                select(AuditLog).where(AuditLog.id > cursor).order_by(AuditLog.id.asc())
             )
             rows = result.scalars().all()
 

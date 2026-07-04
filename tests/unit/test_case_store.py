@@ -8,9 +8,8 @@ from __future__ import annotations
 
 def test_case_store_importable() -> None:
     """Case and Attachment must be importable from app.memory."""
-    from app.memory.case_store import Attachment, Case  # noqa: F401
-
     from app.memory import case_store  # noqa: F401
+    from app.memory.case_store import Attachment, Case  # noqa: F401
 
 
 def test_models_registered_on_base_metadata() -> None:

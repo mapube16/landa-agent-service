@@ -67,9 +67,7 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # Immutability trigger: BEFORE DELETE OR UPDATE raises EXCEPTION
     # ------------------------------------------------------------------
-    op.execute(
-        sa.text(
-            """
+    op.execute(sa.text("""
             CREATE OR REPLACE FUNCTION audit_log_immutable()
             RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
@@ -78,33 +76,23 @@ def upgrade() -> None:
               RETURN NULL;
             END;
             $$;
-            """
-        )
-    )
-    op.execute(
-        sa.text(
-            """
+            """))
+    op.execute(sa.text("""
             CREATE TRIGGER trg_audit_log_immutable
               BEFORE DELETE OR UPDATE ON audit_log
               FOR EACH ROW EXECUTE FUNCTION audit_log_immutable();
-            """
-        )
-    )
+            """))
 
     # ------------------------------------------------------------------
     # Indexes
     # ------------------------------------------------------------------
     op.create_index("ix_audit_log_created_at", "audit_log", ["created_at"])
-    op.create_index(
-        "ix_audit_log_conversation_id", "audit_log", ["conversation_id"]
-    )
+    op.create_index("ix_audit_log_conversation_id", "audit_log", ["conversation_id"])
 
 
 def downgrade() -> None:
     """Drop trigger, function, indexes, and table in safe order."""
-    op.execute(
-        sa.text("DROP TRIGGER IF EXISTS trg_audit_log_immutable ON audit_log")
-    )
+    op.execute(sa.text("DROP TRIGGER IF EXISTS trg_audit_log_immutable ON audit_log"))
     op.execute(sa.text("DROP FUNCTION IF EXISTS audit_log_immutable()"))
     op.drop_index("ix_audit_log_conversation_id", table_name="audit_log")
     op.drop_index("ix_audit_log_created_at", table_name="audit_log")

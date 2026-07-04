@@ -71,7 +71,10 @@ def _meta_payload(from_phone: str, msg_type: str = "text", text: str = "Hola") -
                     {
                         "value": {
                             "messaging_product": "whatsapp",
-                            "metadata": {"display_phone_number": "15551234567", "phone_number_id": "111"},
+                            "metadata": {
+                                "display_phone_number": "15551234567",
+                                "phone_number_id": "111",
+                            },
                             "messages": [msg],
                         },
                         "field": "messages",
@@ -163,7 +166,7 @@ async def test_cartera_number_routes_to_handler(
 async def test_unknown_number_silently_dropped(
     client_with_cartera: tuple[AsyncClient, MagicMock, MagicMock],
 ) -> None:
-    """Unknown number (not in cartera allowlist, not in client allowlist) must be silently dropped."""
+    """Unknown number (neither cartera nor client allowlist) must be silently dropped."""
     ac, qa_graph, meta_client = client_with_cartera
     body = _meta_payload(UNKNOWN_PHONE)
 

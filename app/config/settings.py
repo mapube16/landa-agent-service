@@ -305,10 +305,10 @@ class RateLimitSettings(BaseSettings):
     )
 
     enabled: bool = True
-    phone_limit: int = 20    # messages per window per WhatsApp number
-    poliza_limit: int = 10   # messages per window per poliza_id
+    phone_limit: int = 20  # messages per window per WhatsApp number
+    poliza_limit: int = 10  # messages per window per poliza_id
     global_limit: int = 500  # total messages per window across all numbers
-    window_s: int = 60       # sliding window size in seconds
+    window_s: int = 60  # sliding window size in seconds
 
 
 class LambdaProyectSettings(BaseSettings):

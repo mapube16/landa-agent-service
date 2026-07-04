@@ -26,9 +26,7 @@ from app.config.settings import settings
 # register on ``app.config.db.Base.metadata`` before alembic captures it.
 # Phase 4 (04-01): cases + attachments tables.
 from app.memory import case_store  # noqa: F401
-
 from app.security import audit_log  # noqa: F401  # Phase 5: registers audit_log on Base.metadata
-
 
 config = context.config
 
