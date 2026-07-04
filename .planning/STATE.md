@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v18.0
 milestone_name: milestone
 status: in-progress
-last_updated: "2026-07-04T13:30:00Z"
-stopped_at: "Completed 05-02-PLAN.md"
+last_updated: "2026-07-04T14:15:00Z"
+stopped_at: "Completed 05-05-PLAN.md (Wave 2 done: 05-03/04/05 in parallel)"
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 29
-  completed_plans: 25
+  completed_plans: 28
   current_phase: "05-seguridad-y-audit-log"
-  current_plan: "05-03"
+  current_plan: "05-06"
 ---
 
 ## Decisions
@@ -39,4 +39,7 @@ progress:
 | Phase 04 P04-08 | 45 | 2 tasks | 8 files |
 | 05 | 05-01 | 23 | 3 | 8 |
 | 05 | 05-02 | 30 | 2 | 2 |
+| 05 | 05-03 | 22 | 2 | 2 |
+| 05 | 05-04 | 35 | 2 | 3 |
+| 05 | 05-05 | 30 | 2 | 3 |
 
