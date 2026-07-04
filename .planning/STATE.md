@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v18.0
 milestone_name: milestone
 status: in-progress
-last_updated: "2026-07-04T12:37:32Z"
-stopped_at: "Completed 05-01-PLAN.md"
+last_updated: "2026-07-04T13:30:00Z"
+stopped_at: "Completed 05-02-PLAN.md"
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 29
-  completed_plans: 24
+  completed_plans: 25
   current_phase: "05-seguridad-y-audit-log"
-  current_plan: "05-02"
+  current_plan: "05-03"
 ---
 
 ## Decisions
@@ -27,6 +27,7 @@ progress:
 - [Phase 04-06]: cron(check_pending_cases, minute=set(range(60))) fires every minute; off-hours gate bails immediately so overhead is negligible
 - [Phase 04]: D-28 gate placed at top of _send_outbound (early return on block); payment_approved forwarded as ARQ primitive kwarg for mirror re-check
 - [Phase 05-01]: metadata_json Python attribute maps SQL 'metadata' column (SQLAlchemy reserved attr conflict); AuditPayload RootModel rejects floats/nested; emit/emit_task fully fail-open; pg_advisory_xact_lock serializes chain inserts (v1); pre-existing mypy errors in app/features/payment/ are deferred (out of scope)
+- [Phase 05-02]: JB-01 (Spanish ignore variant) classified judge_mock — Spanish does not trigger English-only firewall patterns; integration tests gated on INTEGRATION_LLM not OPENROUTER_API_KEY (conftest always sets the latter to fake); judge_retries=1 in test state forces single-shot escalation
 
 ## Performance Metrics
 
@@ -37,4 +38,5 @@ progress:
 | Phase 04 P06 | 9 | 2 tasks | 4 files |
 | Phase 04 P04-08 | 45 | 2 tasks | 8 files |
 | 05 | 05-01 | 23 | 3 | 8 |
+| 05 | 05-02 | 30 | 2 | 2 |
 
