@@ -222,12 +222,35 @@ class WorkerSettings:
 
     @staticmethod
     async def on_startup(ctx: dict[str, Any]) -> None:
-        """Log registered job names so we can verify the right code is deployed."""
+        """Initialise the DB engine/session_factory and log registered jobs.
+
+        The FastAPI lifespan (which sets ``app.state.session_factory``) does NOT
+        run in the ARQ worker process, but payment nodes reach the DB through
+        ``_session_factory_fn`` → ``app.main.app.state.session_factory``. Wire it
+        here so ``process_attachment`` and the cron jobs can open sessions.
+        """
         import structlog
 
+        from app.config.db import create_db_engine, create_session_factory
+        from app.main import app as _app
+
         log = structlog.get_logger("worker.startup")
+
+        engine = create_db_engine()
+        _app.state.db_engine = engine
+        _app.state.session_factory = create_session_factory(engine)
+        ctx["db_engine"] = engine
+
         log.info(
             "worker.functions.registered",
             count=len(WorkerSettings.functions),
             names=[f.__name__ for f in WorkerSettings.functions],
+            db_wired=True,
         )
+
+    @staticmethod
+    async def on_shutdown(ctx: dict[str, Any]) -> None:
+        """Dispose the DB engine created in ``on_startup``."""
+        engine = ctx.get("db_engine")
+        if engine is not None:
+            await engine.dispose()

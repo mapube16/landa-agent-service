@@ -563,7 +563,10 @@ async def _dispatch_message(
             msg=msg,
             qa_graph=app_state.qa_graph,
             meta_client=app_state.meta,
-            db_session_factory=getattr(app_state, "db_session_factory", None),
+            # Lifespan exposes the async_sessionmaker as ``session_factory``
+            # (main.py). Passing the wrong attr name here left it None and
+            # crashed handle_cartera_message on every cartera message.
+            db_session_factory=getattr(app_state, "session_factory", None),
         )
         return
 
