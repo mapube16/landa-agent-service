@@ -2,16 +2,13 @@
 gsd_state_version: 1.0
 milestone: v18.0
 milestone_name: milestone
-status: in-progress
-last_updated: "2026-07-04T14:15:00Z"
-stopped_at: "Completed 05-05-PLAN.md (Wave 2 done: 05-03/04/05 in parallel)"
+status: unknown
+last_updated: "2026-07-04T15:16:26.579Z"
 progress:
   total_phases: 8
   completed_phases: 1
-  total_plans: 29
-  completed_plans: 28
-  current_phase: "05-seguridad-y-audit-log"
-  current_plan: "05-06"
+  total_plans: 36
+  completed_plans: 29
 ---
 
 ## Decisions
@@ -28,6 +25,8 @@ progress:
 - [Phase 04]: D-28 gate placed at top of _send_outbound (early return on block); payment_approved forwarded as ARQ primitive kwarg for mirror re-check
 - [Phase 05-01]: metadata_json Python attribute maps SQL 'metadata' column (SQLAlchemy reserved attr conflict); AuditPayload RootModel rejects floats/nested; emit/emit_task fully fail-open; pg_advisory_xact_lock serializes chain inserts (v1); pre-existing mypy errors in app/features/payment/ are deferred (out of scope)
 - [Phase 05-02]: JB-01 (Spanish ignore variant) classified judge_mock — Spanish does not trigger English-only firewall patterns; integration tests gated on INTEGRATION_LLM not OPENROUTER_API_KEY (conftest always sets the latter to fake); judge_retries=1 in test state forces single-shot escalation
+- [Phase 05-06]: Cartera exemption via structural ordering: rate_limit placed AFTER cartera branch in _dispatch_message — no explicit allowlist needed, exemption is a dispatch-order property
+- [Phase 05-06]: outbound_sent gated on sent=True flag (set inside try-block per branch) — does not reorder mirror enqueue, minimal restructuring of _send_outbound
 
 ## Performance Metrics
 
@@ -42,4 +41,5 @@ progress:
 | 05 | 05-03 | 22 | 2 | 2 |
 | 05 | 05-04 | 35 | 2 | 3 |
 | 05 | 05-05 | 30 | 2 | 3 |
+| Phase 05 P06 | 52 | 2 tasks | 2 files |
 

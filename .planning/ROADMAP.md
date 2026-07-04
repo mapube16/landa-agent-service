@@ -302,7 +302,7 @@ Cada fase desbloquea la siguiente. Dentro de una fase, los planes pueden correr 
 
 **Goal:** [Captured for future planning]
 **Requirements:** TBD
-**Plans:** 1/7 plans executed
+**Plans:** 6/7 plans executed
 
 Construir endpoint `POST /alerts/sentry` en landa-agent-service que reciba webhooks de Sentry (issue created / regression / alert rule) y mande mensaje WhatsApp al número del operador de cartera usando el sender Meta Cloud API que ya existirá en Phase 2. Dogfooding del propio agente WhatsApp para alertas internas.
 
