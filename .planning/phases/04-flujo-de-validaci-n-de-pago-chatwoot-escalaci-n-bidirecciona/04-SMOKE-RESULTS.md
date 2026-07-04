@@ -53,11 +53,24 @@ cartera +573173717828, bot +1 555 203 1790 (WA_PHONE_ID 1210226812169851).
 
 ## Pendientes de infra/ops
 
-- Volumen Railway NO montado en `landa-agent-service`/`agent-worker` →
-  comprobantes en disco efimero (se pierden en redeploy). Montar en
-  `/data/comprobantes` para produccion.
-- `APP_ENV=dev` en produccion (health reporta `env: dev`).
-- Rotar `CHATWOOT_API_KEY` (filtrada en terminal en sesion previa).
+RESUELTO (sesion 2026-07-04):
+- [x] Volumen Railway montado: `agent-worker-volume` en `/data/comprobantes`
+  del servicio `agent-worker` (unico que hace I/O de comprobantes: store,
+  forward, cleanup). Worker redeploy SUCCESS, db_wired=true. Comprobantes ya
+  no se pierden en redeploy.
+- [x] CI verde en GitHub Actions: se elimino el paso `ruff format --check`
+  (contradecia a black -> build imposible); black es el formateador de
+  referencia. mypy --strict limpio (37 errores cerrados). ruff + 419 tests
+  verdes. Commit 9a63fb5 -> conclusion: success.
+
+PENDIENTE (requieren accion humana / UI, no automatizables sin riesgo):
+- Rotar `CHATWOOT_API_KEY` (filtrada en terminal en sesion previa). Se deja
+  para el operador: regenerar en Chatwoot (Profile Settings -> Access Token)
+  y `railway variable set CHATWOOT_API_KEY=<nuevo>` en web + worker. NO
+  automatizado: rotar la cred en vivo sin UI arriesga romper el canal
+  Chatwoot recien reparado si el update no es atomico.
+- `APP_ENV=dev` en produccion (health reporta `env: dev`) -- `railway
+  variable set APP_ENV=production` en web + worker cuando se decida.
 - Template Meta `voice_no_answer_followup`: estado APPROVED sin verificar.
 - Numero WhatsApp en modo test de Meta (max 5 recipients): pasar a live para
   clientes reales.
