@@ -51,9 +51,9 @@ def test_audit_log_model_metadata_python_attribute() -> None:
     from app.security.audit_log import AuditLog
 
     # The ORM attribute name must be metadata_json
-    assert hasattr(AuditLog, "metadata_json"), (
-        "AuditLog must have 'metadata_json' Python attribute (SQL column 'metadata')"
-    )
+    assert hasattr(
+        AuditLog, "metadata_json"
+    ), "AuditLog must have 'metadata_json' Python attribute (SQL column 'metadata')"
     # The SQL column name must still be 'metadata'
     col = AuditLog.__table__.c["metadata"]
     assert col is not None
@@ -74,8 +74,8 @@ def test_audit_log_prev_hash_server_default() -> None:
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not os.getenv("POSTGRES_URL"),
-    reason="Integration test requires POSTGRES_URL env var",
+    not os.getenv("INTEGRATION_POSTGRES_URL"),
+    reason="Integration test requires INTEGRATION_POSTGRES_URL (live DB with 0003 applied)",
 )
 async def test_audit_log_delete_raises_db_error() -> None:
     """DELETE on audit_log row must raise DBAPIError (trigger guard)."""
@@ -85,6 +85,7 @@ async def test_audit_log_delete_raises_db_error() -> None:
     from app.config.db import create_db_engine, create_session_factory
     from app.security.audit_log import AuditLog
 
+    os.environ["POSTGRES_URL"] = os.environ["INTEGRATION_POSTGRES_URL"]
     engine = create_db_engine()
     session_factory = create_session_factory(engine)
 
@@ -103,17 +104,15 @@ async def test_audit_log_delete_raises_db_error() -> None:
 
         # Attempt DELETE — must raise
         with pytest.raises(DBAPIError):
-            await session.execute(
-                sa.text("DELETE FROM audit_log WHERE id = :i"), {"i": row_id}
-            )
+            await session.execute(sa.text("DELETE FROM audit_log WHERE id = :i"), {"i": row_id})
 
     await engine.dispose()
 
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not os.getenv("POSTGRES_URL"),
-    reason="Integration test requires POSTGRES_URL env var",
+    not os.getenv("INTEGRATION_POSTGRES_URL"),
+    reason="Integration test requires INTEGRATION_POSTGRES_URL (live DB with 0003 applied)",
 )
 async def test_audit_log_update_raises_db_error() -> None:
     """UPDATE on audit_log row must raise DBAPIError (trigger guard)."""
@@ -123,6 +122,7 @@ async def test_audit_log_update_raises_db_error() -> None:
     from app.config.db import create_db_engine, create_session_factory
     from app.security.audit_log import AuditLog
 
+    os.environ["POSTGRES_URL"] = os.environ["INTEGRATION_POSTGRES_URL"]
     engine = create_db_engine()
     session_factory = create_session_factory(engine)
 
