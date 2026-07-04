@@ -1,18 +1,14 @@
 ---
 gsd_state_version: 1.0
-milestone: v21.0
+milestone: v18.0
 milestone_name: milestone
-status: phase-04-in-progress
-last_updated: "2026-07-03T22:00:00.000Z"
+status: unknown
+last_updated: "2026-07-04T01:50:07.762Z"
 progress:
   total_phases: 8
   completed_phases: 0
-  total_plans: 31
-  completed_plans: 19
-  percent: 61
-current_phase: 04-flujo-de-validaci-n-de-pago-chatwoot-escalaci-n-bidirecciona
-current_plan: 04-06
-stopped_at: "Completed 04-05-PLAN.md"
+  total_plans: 29
+  completed_plans: 22
 ---
 
 ## Decisions
@@ -23,6 +19,9 @@ stopped_at: "Completed 04-05-PLAN.md"
 - (04-05) LangGraph Command(resume=value) preferred over aupdate_state+ainvoke for interrupt() resumption
 - (04-05) _get_cartera_allowlist() uses lru_cache(maxsize=1) — same pattern as get_meta_client()
 - (04-05) Cartera branch inserted BEFORE client allowlist in _dispatch_message (D-06, T-04-05-01)
+- [Phase 04-06]: business_minutes_between uses day-by-day loop (60-day bound) over WORKDAY_BLOCKS; int minutes via integer division
+- [Phase 04-06]: _now_utc and _get_settings_payment are module-level callables for monkeypatching without touching real singletons
+- [Phase 04-06]: cron(check_pending_cases, minute=set(range(60))) fires every minute; off-hours gate bails immediately so overhead is negligible
 
 ## Performance Metrics
 
@@ -30,3 +29,5 @@ stopped_at: "Completed 04-05-PLAN.md"
 |-------|------|---------------|-------|-------|
 | 04 | 04-04 | 90 | 2 | 7 |
 | 04 | 04-05 | 45 | 2 | 4 |
+| Phase 04 P06 | 9 | 2 tasks | 4 files |
+
