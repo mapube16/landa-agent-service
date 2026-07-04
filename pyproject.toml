@@ -71,6 +71,9 @@ exclude = [
 asyncio_mode = "auto"
 testpaths = ["tests", "app"]
 addopts = "-ra -q"
+markers = [
+    "integration: end-to-end integration tests (Phase 4 success criteria, Plan 04-08)",
+]
 
 [tool.uv]
 # DEVIATION (Phase 1, plan 01-01): arq 0.28.0 declares redis>=4.2.0,<6, but
