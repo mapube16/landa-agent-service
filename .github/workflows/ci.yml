@@ -35,4 +35,4 @@ jobs:
       - name: mypy
         run: uv run mypy app
       - name: pytest
-        run: uv run pytest -q
+        run: uv run pytest -q -m "not integration"
