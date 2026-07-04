@@ -22,7 +22,12 @@ Ejecutando **Fase 4** (`04-flujo-de-validaci-n-de-pago-chatwoot-escalaci-n-bidir
 Plan: `.planning/phases/04-flujo-de-validaci-n-de-pago-chatwoot-escalaci-n-bidirecciona/04-04-PLAN.md`
 
 - **Task 1** (comprobante storage helper, `app/features/payment/storage.py`) — ✅ terminado y mergeado a `main` (commits `8c24e5b` RED, `c0e3610` GREEN).
-- **Task 2** (subgrafo de pago: `build_payment_subgraph`, entry router en `app/features/qa/graph.py`, registro `process_attachment` en `app/worker.py`) — el intento anterior murió 2 veces sin avisar (corte de sesión silencioso, sin notificación de finalización). Un tercer intento (`agentId a44e4d1fce12057c4`, worktree `.claude/worktrees/agent-a44e4d1fce12057c4`) estaba corriendo en background al momento de este handoff.
+- **Task 2** (subgrafo de pago: `build_payment_subgraph`, entry router en `app/features/qa/graph.py`, registro `process_attachment` en `app/worker.py`) — 3 intentos, ninguno cerró:
+  1. Murió sin avisar (corte de sesión silencioso).
+  2. Ídem, sin avanzar nada sobre el intento 1.
+  3. `agentId a44e4d1fce12057c4`, worktree `.claude/worktrees/agent-a44e4d1fce12057c4` — este fue **detenido manualmente** (`killed`, "stopped by user", probablemente al cerrar la sesión para cambiar de compu) a mitad de arreglar un problema de tipado (`_session_factory_returning`). Dejó cambios reales SIN commitear en: `app/features/payment/nodes.py`, `app/features/payment/tests/test_nodes.py`, `app/config/db.py`, `app/models/meta.py`.
+
+  **IMPORTANTE**: este worktree (`.claude/worktrees/agent-a44e4d1fce12057c4`) es **local a la máquina donde se generó**, no está en GitHub. Si retomas desde otro computador, ese progreso de Task 2 (aunque incompleto) no existe ahí — tendrás que regenerarlo desde cero, o si sigues en la misma máquina, recuperarlo de ese path antes de que se limpie.
 
 ### Qué revisar primero al retomar
 
