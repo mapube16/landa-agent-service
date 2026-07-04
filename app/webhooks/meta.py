@@ -8,9 +8,10 @@ Endpoints (D-09):
   match, 403 otherwise.
 - ``POST /webhooks/meta`` — Inbound message events.
 
-**INVARIANT — D-15 message processing order (Plan 04-05 extension):**
+**INVARIANT — D-15 message processing order (Plan 05-06 extension):**
 
-    HMAC -> parse -> dedup -> cartera-allowlist -> client-allowlist -> firewall -> graph dispatch
+    HMAC -> parse -> dedup -> cartera-allowlist -> rate_limit
+        -> client-allowlist -> firewall -> graph dispatch
 
 This order is **not negotiable**. Reordering breaks the threat model:
 
@@ -22,6 +23,9 @@ This order is **not negotiable**. Reordering breaks the threat model:
   3. Dedup before allowlist means a replayed message is rejected even
      for non-allowlisted senders, preventing a malicious replay from
      toggling rate-limit budgets repeatedly (T-02-06).
+  3b. Rate limit AFTER cartera branch: cartera taps are structurally exempt
+     from rate limiting (T-05-06-02). Limiter placed before client allowlist
+     so flooding clients are blocked before firewall/graph (T-05-06-01).
   4. Allowlist before firewall prevents outbound leakage to unknown
      numbers (T-02-07).
   5. Firewall before graph dispatch: injected payload never reaches LLM
@@ -57,8 +61,10 @@ from app.features.payment.cartera import handle_cartera_message
 from app.features.qa.messages import ESCAPE_REGEX, T_06
 from app.integrations.meta_cloud import _hash_phone
 from app.models.meta import InboundEnvelope, InboundMessage, MessageText
+from app.security import audit_log
 from app.security.output_firewall import check_outbound
 from app.security.prompt_firewall import sanitize
+from app.security.rate_limiter import T_RATE_LIMITED, check_rate_limit
 
 # Explicit user reset commands — wipe the checkpoint so the user can recover
 # from a stuck conversation (e.g. stale ``awaiting_policy_choice`` state).
@@ -127,7 +133,7 @@ def _extract_outbound_message(final_state: dict[str, Any]) -> Any | None:
     return None
 
 
-async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> None:
+async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> None:  # noqa: C901
     """Send outbound message via meta + enqueue mirror job.
 
     ``msg`` is an AIMessage. If ``additional_kwargs['interactive']`` is set,
@@ -173,11 +179,24 @@ async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> No
                 )
             except Exception as exc:  # noqa: BLE001
                 log.error("output_firewall.chatwoot_note_failed", error_type=type(exc).__name__)
+        # SEC-04 audit: outbound_blocked event (fail-open — audit failure must not crash).
+        # conversation_id uses _hash_phone — no raw PII (CLAUDE.md invariant).
+        # Note: differs from 05-04 which uses the LangGraph thread_id; here we only
+        # have the phone and wamid so we hash the phone consistently.
+        audit_log.emit_task(
+            action="outbound_blocked",
+            actor="bot",
+            conversation_id=_hash_phone(phone),
+            payload={"wamid_in": wamid, "reason": str(fw_reason)},
+        )
         # Do NOT enqueue mirror_outbound for the blocked text.
         return
 
     interactive = msg.additional_kwargs.get("interactive") if msg else None
     text_for_mirror = text_content
+    # Track whether the send call succeeded so we only audit on actual delivery.
+    sent = False
+    kind = "text"
     try:
         if interactive and interactive.get("kind") == "buttons":
             await app_state.meta.send_buttons(
@@ -191,6 +210,8 @@ async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> No
                 + ", ".join(title for _, title in interactive["buttons"])
                 + "]"
             )
+            kind = "buttons"
+            sent = True
         elif interactive and interactive.get("kind") == "list":
             await app_state.meta.send_list(
                 to=phone,
@@ -205,10 +226,26 @@ async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> No
                 + ", ".join(title for _, title, _ in interactive["rows"])
                 + "]"
             )
+            kind = "list"
+            sent = True
         else:
             await app_state.meta.send_text(to=phone, body=text_for_mirror)
+            sent = True
     except Exception as exc:  # noqa: BLE001
         log.error("qa_graph.outbound.send_failed", error_type=type(exc).__name__)
+    # SEC-04 audit: outbound_sent only when the send call succeeded (fail-open).
+    # text_sha256 binds the audit row to the exact text delivered without storing PII.
+    if sent:
+        audit_log.emit_task(
+            action="outbound_sent",
+            actor="bot",
+            conversation_id=_hash_phone(phone),
+            payload={
+                "wamid_in": wamid,
+                "kind": kind,
+                "text_sha256": hashlib.sha256(text_for_mirror.encode()).hexdigest(),
+            },
+        )
     if hasattr(app_state, "arq") and app_state.arq is not None:
         try:
             await app_state.arq.enqueue_job(
@@ -297,8 +334,9 @@ async def verify(
 async def receive(request: Request) -> Response:
     """Receive Meta webhook events.
 
-    Processing order (D-15 + Plan 04-05):
-    HMAC -> parse -> dedup -> cartera-allowlist -> client-allowlist -> firewall -> graph
+    Processing order (D-15 + Plan 05-06):
+    HMAC -> parse -> dedup -> cartera-allowlist -> rate_limit
+        -> client-allowlist -> firewall -> graph
 
     Returns HTTP 200 once HMAC succeeds, regardless of downstream
     decisions (skip, dedup-hit, dispatch). Returning 5xx would make
@@ -376,6 +414,31 @@ async def _force_reset(app_state: Any, thread_id: str) -> None:
         log.info("webhook.checkpoint.force_reset", thread_hash=_hash_phone(thread_id))
     except Exception as exc:  # noqa: BLE001
         log.warning("webhook.checkpoint.force_reset_failed", error_type=type(exc).__name__)
+
+
+async def _peek_poliza_id(app_state: Any, thread_id: str) -> str | None:
+    """Peek at the LangGraph checkpoint to extract poliza_id for per-poliza rate limiting.
+
+    Mirrors _reset_if_closed: reads the checkpointer without mutating it.
+    One checkpoint read per message is acceptable — same cost class as the
+    _reset_if_closed read that follows later in the flow.
+
+    Returns None when no checkpointer is wired, the thread has no state yet,
+    or any error occurs (fail-open so rate limiting still works at phone level).
+    """
+    checkpointer = getattr(app_state, "checkpointer", None)
+    if checkpointer is None:
+        return None
+    try:
+        config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+        existing = await checkpointer.aget(config)
+        if existing is None:
+            return None
+        channel_values = existing.get("channel_values", {})
+        return channel_values.get("poliza_id")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("webhook.peek_poliza_id.failed", error_type=type(exc).__name__)
+        return None
 
 
 async def _send_searching_ack(*, app_state: Any, thread_id: str, phone: str, meta: Any) -> None:
@@ -538,12 +601,13 @@ async def _handle_comprobante(*, msg: InboundMessage, request: Request, phone_ha
         )
 
 
-async def _dispatch_message(
+async def _dispatch_message(  # noqa: C901
     *, msg: InboundMessage, meta: Any, redis: Any, request: Request
 ) -> None:
-    """Apply D-15 + Plan 04-05 dispatch order.
+    """Apply D-15 + Plan 05-06 dispatch order.
 
-    Order: dedup -> cartera-allowlist -> client-allowlist -> firewall -> graph dispatch.
+    Order: dedup -> cartera-allowlist -> rate_limit
+        -> client-allowlist -> firewall -> graph dispatch.
 
     ``meta`` and ``redis`` are typed ``Any`` because their concrete types
     live in ``app.state`` (MetaCloudClient and redis.asyncio.Redis) and
@@ -587,6 +651,36 @@ async def _dispatch_message(
             # crashed handle_cartera_message on every cartera message.
             db_session_factory=getattr(app_state, "session_factory", None),
         )
+        return
+
+    # 4c'. Rate limit (05-06, SEC-06) — AFTER cartera branch so cartera numbers
+    #      are structurally exempt (T-05-06-02). BEFORE client allowlist so
+    #      flooding clients are stopped before firewall/graph (T-05-06-01).
+    #      poliza_id peeked from checkpoint so per-poliza level is populated.
+    poliza_id = await _peek_poliza_id(request.app.state, normalized_from)
+    try:
+        rl = await check_rate_limit(redis, phone=normalized_from, poliza_id=poliza_id)
+    except Exception as exc:  # noqa: BLE001
+        # Belt-and-suspenders on top of the limiter's own fail-open: any
+        # unexpected exception defaults to allowed so a rate-limiter bug
+        # never hard-blocks legitimate traffic.
+        log.error(
+            "rate_limit.check_failed",
+            error_type=type(exc).__name__,
+            phone_hash=phone_hash,
+        )
+        rl = type("_RLAllow", (), {"allowed": True, "scope": None})()
+    if not rl.allowed:
+        log.warning(
+            "webhook.rate_limited",
+            scope=rl.scope,
+            phone_hash=phone_hash,
+            result="rate_limited",
+        )
+        try:
+            await meta.send_text(to=msg.from_, body=T_RATE_LIMITED)
+        except Exception as exc:  # noqa: BLE001
+            log.error("webhook.rate_limited.send_failed", error_type=type(exc).__name__)
         return
 
     # 4d. Client allowlist (D-02 + Pitfall 8 E.164 normalization).

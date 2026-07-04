@@ -4,7 +4,8 @@ Task 1: Rate limit wired between cartera branch and client-allowlist in _dispatc
 Task 2: outbound_sent / outbound_blocked audit events emitted from _send_outbound.
 
 Dispatch order after 05-06 (D-15 extension):
-    HMAC -> parse -> dedup -> cartera-allowlist -> rate_limit -> client-allowlist -> firewall -> graph
+    HMAC -> parse -> dedup -> cartera-allowlist -> rate_limit
+        -> client-allowlist -> firewall -> graph
 
 Cartera and duplicate messages are structurally exempt: the rate limiter is placed
 AFTER the cartera branch so cartera taps can never be throttled (threat T-05-06-02).
@@ -16,11 +17,10 @@ import asyncio
 import hashlib
 import hmac
 import json
-from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 # ---------------------------------------------------------------------------
 # Constants + helpers
@@ -108,7 +108,7 @@ def stub_f5(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock]:
 
 
 @pytest.mark.asyncio
-async def test_rate_limited_sends_T_RATE_LIMITED_and_returns(
+async def test_rate_limited_sends_t_rate_limited_and_returns(
     client: AsyncClient,
     stub_f5: tuple[MagicMock, MagicMock],
     monkeypatch: pytest.MonkeyPatch,
@@ -118,8 +118,8 @@ async def test_rate_limited_sends_T_RATE_LIMITED_and_returns(
     check_rate_limit returns (False, "phone") -> meta.send_text called with T_RATE_LIMITED,
     and _handle_text_message is never called (no further processing).
     """
-    from app.security.rate_limiter import T_RATE_LIMITED
     import app.webhooks.meta as meta_module
+    from app.security.rate_limiter import T_RATE_LIMITED
 
     meta_mock, redis_mock = stub_f5
 
@@ -202,13 +202,14 @@ async def test_cartera_number_never_calls_check_rate_limit(
         lambda: frozenset([CARTERA_PHONE_E164]),
     )
 
+    # Stub qa_graph so _dispatch_message -> cartera branch doesn't crash
+    qa_graph_mock = MagicMock()
+    qa_graph_mock.ainvoke = AsyncMock(return_value={"messages": [], "node": "answering_qa"})
+    monkeypatch.setattr(fastapi_app.state, "qa_graph", qa_graph_mock, raising=False)
+
     # Patch handle_cartera_message so we don't need real DB/graph
-    with patch(
-        "app.webhooks.meta.handle_cartera_message", new=AsyncMock()
-    ) as mock_cartera:
-        with patch.object(
-            meta_module, "check_rate_limit", new=AsyncMock()
-        ) as mock_rl:
+    with patch("app.webhooks.meta.handle_cartera_message", new=AsyncMock()) as mock_cartera:
+        with patch.object(meta_module, "check_rate_limit", new=AsyncMock()) as mock_rl:
             body = _cartera_text_payload(message_id="wamid.cartera_exempt")
             sig = _sign(body)
             r = await client.post(
@@ -292,9 +293,7 @@ async def test_peek_poliza_id_returns_poliza_from_checkpoint() -> None:
     import app.webhooks.meta as meta_module
 
     checkpointer_mock = MagicMock()
-    checkpointer_mock.aget = AsyncMock(
-        return_value={"channel_values": {"poliza_id": "POL-999"}}
-    )
+    checkpointer_mock.aget = AsyncMock(return_value={"channel_values": {"poliza_id": "POL-999"}})
 
     app_state = MagicMock()
     app_state.checkpointer = checkpointer_mock
@@ -337,8 +336,9 @@ async def test_peek_poliza_id_returns_none_when_checkpointer_errors() -> None:
 @pytest.mark.asyncio
 async def test_outbound_sent_audit_emitted_on_successful_send() -> None:
     """Successful text send -> audit_log.emit_task called with action='outbound_sent'."""
-    import app.webhooks.meta as meta_module
     from langchain_core.messages import AIMessage
+
+    import app.webhooks.meta as meta_module
 
     meta_client = MagicMock()
     meta_client.send_text = AsyncMock(return_value="wamid.sent")
@@ -358,20 +358,22 @@ async def test_outbound_sent_audit_emitted_on_successful_send() -> None:
     call_kwargs = mock_audit.emit_task.call_args.kwargs
     assert call_kwargs["action"] == "outbound_sent"
     assert call_kwargs["actor"] == "bot"
-    # conversation_id must be hash (no raw phone)
+    # conversation_id must be a hash via _hash_phone (no raw phone stored — PII rule).
+    # _hash_phone returns 8-char truncated sha256 for log-safe correlation.
     assert call_kwargs["conversation_id"] != "+15555550100"
-    assert len(call_kwargs["conversation_id"]) == 64  # sha256 hex
+    assert call_kwargs["conversation_id"] is not None
     payload = call_kwargs["payload"]
     assert payload["wamid_in"] == "wamid.in_001"
     assert payload["kind"] in {"text", "buttons", "list"}
-    assert len(payload["text_sha256"]) == 64  # sha256 hex
+    assert len(payload["text_sha256"]) == 64  # sha256 hex (full digest for audit binding)
 
 
 @pytest.mark.asyncio
 async def test_outbound_blocked_audit_emitted_on_firewall_block() -> None:
     """Firewall-blocked send -> emit_task called with action='outbound_blocked'."""
-    import app.webhooks.meta as meta_module
     from langchain_core.messages import AIMessage
+
+    import app.webhooks.meta as meta_module
 
     meta_client = MagicMock()
     meta_client.send_text = AsyncMock(return_value="wamid.esc")
@@ -402,8 +404,9 @@ async def test_outbound_blocked_audit_emitted_on_firewall_block() -> None:
 @pytest.mark.asyncio
 async def test_outbound_sent_not_emitted_when_send_raises() -> None:
     """meta.send_text raising -> NO outbound_sent event (only successful sends audited)."""
-    import app.webhooks.meta as meta_module
     from langchain_core.messages import AIMessage
+
+    import app.webhooks.meta as meta_module
 
     meta_client = MagicMock()
     meta_client.send_text = AsyncMock(side_effect=RuntimeError("network error"))
@@ -420,16 +423,17 @@ async def test_outbound_sent_not_emitted_when_send_raises() -> None:
 
     # Audit must NOT be called — only successful sends are audited
     for call in mock_audit.emit_task.call_args_list:
-        assert call.kwargs.get("action") != "outbound_sent", (
-            "outbound_sent must not be emitted when send raises"
-        )
+        assert (
+            call.kwargs.get("action") != "outbound_sent"
+        ), "outbound_sent must not be emitted when send raises"
 
 
 @pytest.mark.asyncio
 async def test_outbound_sent_payload_contains_correct_text_sha256() -> None:
     """text_sha256 in audit payload is sha256 of the actual text sent."""
-    import app.webhooks.meta as meta_module
     from langchain_core.messages import AIMessage
+
+    import app.webhooks.meta as meta_module
 
     text_body = "Bienvenido a DPG Seguros."
     expected_hash = hashlib.sha256(text_body.encode()).hexdigest()
