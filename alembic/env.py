@@ -27,7 +27,7 @@ from app.config.settings import settings
 # Phase 4 (04-01): cases + attachments tables.
 from app.memory import case_store  # noqa: F401
 
-# Phase 5 (future): from app.security import audit_log  # noqa: F401
+from app.security import audit_log  # noqa: F401  # Phase 5: registers audit_log on Base.metadata
 
 
 config = context.config
