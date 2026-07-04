@@ -54,20 +54,46 @@ async def mirror_inbound(ctx: dict[str, Any], *, phone: str, text: str, wamid: s
     await chatwoot.post_message(conv_id, text, message_type="incoming")
 
 
-async def mirror_outbound(ctx: dict[str, Any], *, phone: str, text: str, wamid: str) -> None:
+async def mirror_outbound(
+    ctx: dict[str, Any],
+    *,
+    phone: str,
+    text: str,
+    wamid: str,
+    payment_approved: bool = False,
+) -> None:
     """Mirror outbound bot reply to Chatwoot API Channel inbox.
 
     Called after the bot sends a message to the client. Runs asynchronously
     so Chatwoot latency never blocks the bot response.
+
+    Output firewall gate (D-28, T-04-08-03): re-checks check_outbound on the
+    text before posting to Chatwoot so a blocked message is never leaked via
+    the mirror path. The ``payment_approved`` flag is forwarded from the
+    enqueue call in ``_send_outbound``.
 
     Args:
         ctx: ARQ worker context (not used, required by ARQ protocol).
         phone: Recipient's E.164 phone number (primitive str -- ARQ Pitfall 6).
         text: Bot reply text (primitive str).
         wamid: Meta message ID returned by send_text (primitive str).
+        payment_approved: Forwarded from AIMessage.additional_kwargs (D-28).
     """
-    # ponytail: local import keeps cold-start light + avoids circular deps
+    import structlog as _structlog
+
     from app.integrations.chatwoot import get_chatwoot_client
+    from app.security.output_firewall import check_outbound
+
+    _log = _structlog.get_logger("worker.mirror_outbound")
+    allowed, fw_reason = check_outbound(text, payment_approved=payment_approved)
+    if not allowed:
+        # Suppressed — the blocked text must not reach Chatwoot (T-04-08-03).
+        _log.error(
+            "output_firewall.mirror_blocked",
+            reason=fw_reason,
+            wamid=wamid,
+        )
+        return
 
     chatwoot = get_chatwoot_client()
     conv_id = await chatwoot.get_or_create_conversation(phone)

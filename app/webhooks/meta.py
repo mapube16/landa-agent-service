@@ -57,6 +57,7 @@ from app.features.payment.cartera import handle_cartera_message
 from app.features.qa.messages import ESCAPE_REGEX, T_06
 from app.integrations.meta_cloud import _hash_phone
 from app.models.meta import InboundEnvelope, InboundMessage, MessageText
+from app.security.output_firewall import check_outbound
 from app.security.prompt_firewall import sanitize
 
 # Explicit user reset commands — wipe the checkpoint so the user can recover
@@ -133,11 +134,52 @@ async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> No
     sends the rich variant (buttons / list); otherwise sends plain text.
     The mirror to Chatwoot always uses a plain-text rendering so the agent
     inbox stays readable.
+
+    Output firewall gate (D-28, Plan 04-08): check_outbound runs before every
+    send. Payment-confirmation text without payment_approved=True is blocked;
+    the substituted escalation message replaces it. The mirror to Chatwoot is
+    also suppressed for blocked messages (T-04-08-03).
     """
     if not hasattr(app_state, "meta"):
         return
+
+    # D-28: Output firewall gate — must run before any send.
+    text_content = str(msg.content) if msg.content else ""
+    payment_approved = bool((msg.additional_kwargs or {}).get("payment_approved", False))
+    allowed, fw_reason = check_outbound(text_content, payment_approved=payment_approved)
+    if not allowed:
+        log.error(
+            "output_firewall.payment_blocked",
+            reason=fw_reason,
+            phone_hash=_hash_phone(phone),
+            wamid_in=wamid,
+        )
+        # Replace with escalation substitute — no mirror of the blocked text.
+        try:
+            await app_state.meta.send_text(
+                to=phone,
+                body="La revision requiere validacion adicional. Te conecto con un agente humano.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("output_firewall.escalation_send_failed", error_type=type(exc).__name__)
+        # Open Chatwoot and post private note with the block reason.
+        if hasattr(app_state, "chatwoot"):
+            try:
+                conv_id = await app_state.chatwoot.get_or_create_conversation(phone)
+                await app_state.chatwoot.post_message(
+                    conv_id,
+                    f"output_firewall.payment_blocked — {fw_reason}",
+                    message_type="outgoing",
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "output_firewall.chatwoot_note_failed", error_type=type(exc).__name__
+                )
+        # Do NOT enqueue mirror_outbound for the blocked text.
+        return
+
     interactive = msg.additional_kwargs.get("interactive") if msg else None
-    text_for_mirror = str(msg.content) if msg.content else ""
+    text_for_mirror = text_content
     try:
         if interactive and interactive.get("kind") == "buttons":
             await app_state.meta.send_buttons(
@@ -172,7 +214,11 @@ async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> No
     if hasattr(app_state, "arq") and app_state.arq is not None:
         try:
             await app_state.arq.enqueue_job(
-                "mirror_outbound", phone=phone, text=text_for_mirror, wamid=wamid + ":out"
+                "mirror_outbound",
+                phone=phone,
+                text=text_for_mirror,
+                wamid=wamid + ":out",
+                payment_approved=payment_approved,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("qa_graph.mirror_outbound.failed", error_type=type(exc).__name__)
