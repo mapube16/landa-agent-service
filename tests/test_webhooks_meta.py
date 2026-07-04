@@ -407,13 +407,17 @@ async def test_post_image_message_enqueues_process_attachment(
         headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
     )
     assert r.status_code == 200
-    arq_mock.enqueue_job.assert_awaited_once_with(
-        "process_attachment",
-        phone="15555550100",
-        media_id="MEDIA-123",
-        mime_type="image/jpeg",
-        wamid="wamid.img1",
-    )
+    # process_attachment must be enqueued (GAP 2 also enqueues mirror_inbound,
+    # so we check the specific call rather than assert_awaited_once_with).
+    job_calls = {c.args[0]: c for c in arq_mock.enqueue_job.call_args_list if c.args}
+    assert (
+        "process_attachment" in job_calls
+    ), f"process_attachment must be enqueued, got: {list(job_calls)}"
+    process_call = job_calls["process_attachment"]
+    assert process_call.kwargs.get("phone") == "15555550100"
+    assert process_call.kwargs.get("media_id") == "MEDIA-123"
+    assert process_call.kwargs.get("mime_type") == "image/jpeg"
+    assert process_call.kwargs.get("wamid") == "wamid.img1"
     # No F3 echo, no direct LLM call, no premature outbound text.
     meta_mock.send_media_ack.assert_not_called()
     meta_mock.send_text.assert_not_called()
@@ -433,13 +437,16 @@ async def test_post_document_message_enqueues_process_attachment(
         headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
     )
     assert r.status_code == 200
-    arq_mock.enqueue_job.assert_awaited_once_with(
-        "process_attachment",
-        phone="15555550100",
-        media_id="DOC-456",
-        mime_type="application/pdf",
-        wamid="wamid.doc1",
-    )
+    # GAP 2: both process_attachment and mirror_inbound are enqueued.
+    job_calls = {c.args[0]: c for c in arq_mock.enqueue_job.call_args_list if c.args}
+    assert (
+        "process_attachment" in job_calls
+    ), f"process_attachment must be enqueued, got: {list(job_calls)}"
+    process_call = job_calls["process_attachment"]
+    assert process_call.kwargs.get("phone") == "15555550100"
+    assert process_call.kwargs.get("media_id") == "DOC-456"
+    assert process_call.kwargs.get("mime_type") == "application/pdf"
+    assert process_call.kwargs.get("wamid") == "wamid.doc1"
     meta_mock.send_media_ack.assert_not_called()
 
 

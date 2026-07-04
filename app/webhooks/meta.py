@@ -518,6 +518,25 @@ async def _handle_comprobante(*, msg: InboundMessage, request: Request, phone_ha
         result="comprobante_enqueued",
     )
 
+    # GAP 2: mirror the comprobante to Chatwoot so human agents can see it.
+    # Failure must NOT fail the comprobante path — log warning and continue.
+    _fallback_mime = "application/octet-stream"
+    mime_type: str = (media.mime_type or _fallback_mime) if media else _fallback_mime
+    try:
+        await arq.enqueue_job(
+            "mirror_inbound",
+            phone=msg.from_,
+            text=f"[comprobante recibido: {mime_type}]",
+            wamid=f"{msg.id}:mirror",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "webhook.comprobante.mirror_inbound_failed",
+            message_id=msg.id,
+            phone_hash=phone_hash,
+            error_type=type(exc).__name__,
+        )
+
 
 async def _dispatch_message(
     *, msg: InboundMessage, meta: Any, redis: Any, request: Request
