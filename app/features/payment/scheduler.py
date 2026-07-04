@@ -107,6 +107,27 @@ async def check_pending_cases(ctx: dict[str, Any]) -> dict[str, Any]:
         for case in cases:
             elapsed = business_minutes_between(case.created_at, now_utc)
 
+            # GAP 1b: deferred case whose media was never forwarded (off-hours intake).
+            # cartera_message_wamid is None/empty means the media forward never happened.
+            # Perform the actual media forward now instead of (or before) any reminder.
+            if not case.cartera_message_wamid and case.reminder_sent_at is None:
+                from app.features.payment.nodes import forward_case_to_cartera
+
+                log.info(
+                    "scheduler.deferred_forward",
+                    case_id=case.case_id,
+                    elapsed=elapsed,
+                )
+                await forward_case_to_cartera(
+                    session=session,
+                    case=case,
+                    meta=meta,
+                    cartera_phone=cartera_phone,
+                    now=now_utc,
+                )
+                processed += 1
+                continue
+
             if case.reminder_sent_at is None and elapsed >= 20:
                 # D-11: Send reminder to cartera; stamp reminder_sent_at.
                 body = (

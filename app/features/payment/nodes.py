@@ -212,6 +212,122 @@ async def node_receive_comprobante(state: dict[str, Any]) -> dict[str, Any]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Reusable media-forward helper (used by node_forward_to_cartera + scheduler)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+async def forward_case_to_cartera(
+    *,
+    session: Any,
+    case: Any,
+    meta: Any,
+    cartera_phone: str,
+    now: datetime | None = None,
+    fallback_cliente_nombre: str | None = None,
+    fallback_cliente_doc: str | None = None,
+    fallback_poliza_id: str | None = None,
+) -> dict[str, Any]:
+    """Upload all case attachments to Meta and forward to cartera with buttons.
+
+    This is the canonical media-forward implementation shared between:
+    - ``node_forward_to_cartera`` (business-hours path)
+    - ``check_pending_cases`` scheduler (deferred forward on window open)
+
+    GAP 3: wraps the upload/send loop in try/except. On any exception:
+    - logs the error
+    - escalates via Chatwoot (get_or_create_conversation + post_message private note)
+    - sets case.status = 'escalated' + escalated_at
+    - returns {"payment_status": "escalated"}
+
+    On success:
+    - persists case.cartera_message_wamid, case.status = 'awaiting_cartera'
+    - returns {"payment_status": "awaiting_cartera", "cartera_message_wamid": last_wamid}
+
+    ``session`` must already be open; the caller owns the session context
+    (and must call session.flush() / commit() after this returns, if needed).
+    """
+    from pathlib import Path
+
+    if now is None:
+        now = datetime.now(UTC)
+
+    case_id: str = case.case_id
+    attachments = list(case.attachments)
+    total = len(attachments)
+
+    nombre = case.cliente_nombre or fallback_cliente_nombre or "Cliente"
+    doc = case.cliente_doc or fallback_cliente_doc or "N/A"
+    poliza = case.poliza_id or fallback_poliza_id or "N/A"
+    created = case.created_at or now
+    ts_co = created.strftime("%Y-%m-%d %H:%M")
+
+    last_wamid: str = ""
+    try:
+        for idx, att in enumerate(attachments, start=1):
+            uploaded_id = await meta.upload_media(Path(att.path), att.mime_type)
+            caption = (
+                f"Comprobante [{idx}/{total}] - Caso #{case_id}\n"
+                f"Cliente: {nombre} (Doc: {doc})\n"
+                f"Poliza: POL-{poliza}\n"
+                f"Recibido: {ts_co}"
+            )
+            media_kind = "image" if att.mime_type.startswith("image/") else "document"
+
+            if idx == total:
+                # Last attachment carries the 3 action buttons.
+                buttons = [
+                    (f"aprobar|{case_id}", "Aprobar"),
+                    (f"rechazar|{case_id}", "Rechazar"),
+                    (f"info|{case_id}", "Mas info"),
+                ]
+            else:
+                buttons = None
+
+            last_wamid = await meta.send_media(
+                cartera_phone, uploaded_id, media_kind, caption=caption, buttons=buttons
+            )
+
+    except Exception as exc:  # noqa: BLE001
+        # GAP 3: Meta 4xx / network error — escalate instead of crashing.
+        log.error(
+            "payment.forward.send_media_failed",
+            case_id=case_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        chatwoot = _get_chatwoot()
+        try:
+            conv_id = await chatwoot.get_or_create_conversation(case.phone)
+            await chatwoot.post_message(
+                conv_id,
+                f"forward a cartera fallo — case_id={case_id}",
+                message_type="outgoing",
+            )
+        except Exception as cw_exc:  # noqa: BLE001
+            log.error(
+                "payment.forward.chatwoot_escalation_failed",
+                case_id=case_id,
+                error=str(cw_exc),
+            )
+        case.status = "escalated"
+        case.escalated_at = now
+        await session.flush()
+        return {"payment_status": "escalated"}
+
+    # Success: persist wamid + status.
+    case.cartera_message_wamid = last_wamid
+    case.status = "awaiting_cartera"
+    case.work_hours_due_at = now + timedelta(minutes=20)
+    await session.flush()
+
+    log.info("payment.forward.ok", case_id=case_id, total=total, wamid=last_wamid)
+    return {
+        "payment_status": "awaiting_cartera",
+        "cartera_message_wamid": last_wamid,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # node_forward_to_cartera
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -257,6 +373,8 @@ async def node_forward_to_cartera(state: dict[str, Any]) -> dict[str, Any]:
             result = await session.execute(sa.select(Case).where(Case.case_id == case_id))
             case = result.scalars().first()
             if case:
+                # GAP 1a: set status so check_pending_cases can find this case.
+                case.status = "awaiting_cartera"
                 case.work_hours_due_at = due_at
                 await session.flush()
 
@@ -294,57 +412,24 @@ async def node_forward_to_cartera(state: dict[str, Any]) -> dict[str, Any]:
             return {"payment_status": "escalated"}
 
         attachments = list(case.attachments)
-        total = len(attachments)
-
-        if total == 0:
+        if not attachments:
             log.error("payment.forward.no_attachments", case_id=case_id)
             return {"payment_status": "escalated"}
 
-        # Build context fields from case or state.
-        nombre = case.cliente_nombre or cliente_nombre
-        doc = case.cliente_doc or cliente_doc or "N/A"
-        poliza = case.poliza_id or poliza_id or "N/A"
-        created = case.created_at or now
-        ts_co = created.strftime("%Y-%m-%d %H:%M")
+        # Delegate to reusable helper (also used by scheduler deferred forward).
+        # GAP 3: errors inside forward_case_to_cartera are caught there.
+        fwd_result = await forward_case_to_cartera(
+            session=session,
+            case=case,
+            meta=meta,
+            cartera_phone=cartera_phone,
+            now=now,
+            fallback_cliente_nombre=cliente_nombre,
+            fallback_cliente_doc=cliente_doc,
+            fallback_poliza_id=poliza_id,
+        )
 
-        last_wamid: str = ""
-        for idx, att in enumerate(attachments, start=1):
-            from pathlib import Path
-
-            uploaded_id = await meta.upload_media(Path(att.path), att.mime_type)
-            caption = (
-                f"Comprobante [{idx}/{total}] - Caso #{case_id}\n"
-                f"Cliente: {nombre} (Doc: {doc})\n"
-                f"Poliza: POL-{poliza}\n"
-                f"Recibido: {ts_co}"
-            )
-            media_kind = "image" if att.mime_type.startswith("image/") else "document"
-
-            if idx == total:
-                # Last attachment carries the 3 action buttons.
-                buttons = [
-                    (f"aprobar|{case_id}", "Aprobar"),
-                    (f"rechazar|{case_id}", "Rechazar"),
-                    (f"info|{case_id}", "Mas info"),
-                ]
-            else:
-                buttons = None
-
-            last_wamid = await meta.send_media(
-                cartera_phone, uploaded_id, media_kind, caption=caption, buttons=buttons
-            )
-
-        # Persist cartera_message_wamid and update status.
-        case.cartera_message_wamid = last_wamid
-        case.status = "awaiting_cartera"
-        case.work_hours_due_at = now + timedelta(minutes=20)
-        await session.flush()
-
-    log.info("payment.forward.ok", case_id=case_id, total=total, wamid=last_wamid)
-    return {
-        "payment_status": "awaiting_cartera",
-        "cartera_message_wamid": last_wamid,
-    }
+    return fwd_result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -501,6 +586,7 @@ def _make_session_ctx() -> Any:  # type: ignore[return]
 
 
 __all__ = [
+    "forward_case_to_cartera",
     "node_awaiting_cartera",
     "node_confirming",
     "node_forward_to_cartera",
