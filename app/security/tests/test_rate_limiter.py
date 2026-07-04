@@ -16,7 +16,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Stub Redis
 # ---------------------------------------------------------------------------
@@ -34,9 +33,7 @@ class _StubRedis:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.responses: list[Any] = responses if responses is not None else []
 
-    async def eval(
-        self, script: str, numkeys: int, key: str, *args: Any
-    ) -> Any:
+    async def eval(self, script: str, numkeys: int, key: str, *args: Any) -> Any:
         self.calls.append((key, args))
         if self.responses:
             resp = self.responses.pop(0)
@@ -106,9 +103,7 @@ async def test_poliza_id_three_evals_in_order() -> None:
     stub_settings = _make_settings_stub()
 
     with patch("app.security.rate_limiter.settings", stub_settings):
-        result = await check_rate_limit(
-            stub, phone="+573001234567", poliza_id="POL-001"
-        )
+        result = await check_rate_limit(stub, phone="+573001234567", poliza_id="POL-001")
 
     assert result.allowed is True
     assert result.scope is None
@@ -137,15 +132,14 @@ async def test_keys_do_not_contain_raw_phone() -> None:
         await check_rate_limit(stub, phone=raw_phone)
 
     for key, _args in stub.calls:
-        assert raw_phone not in key, (
-            f"Raw phone found in Redis key: {key!r}"
-        )
+        assert raw_phone not in key, f"Raw phone found in Redis key: {key!r}"
 
 
 @pytest.mark.asyncio
 async def test_phone_key_format() -> None:
     """Phone key starts with 'rl:phone:' followed by exactly 16 hex chars."""
     import re
+
     from app.security.rate_limiter import check_rate_limit
 
     stub = _StubRedis(responses=[1, 1])
@@ -155,9 +149,9 @@ async def test_phone_key_format() -> None:
         await check_rate_limit(stub, phone="+573001234567")
 
     phone_key = stub.calls[0][0]
-    assert re.fullmatch(r"rl:phone:[0-9a-f]{16}", phone_key), (
-        f"Phone key has unexpected format: {phone_key!r}"
-    )
+    assert re.fullmatch(
+        r"rl:phone:[0-9a-f]{16}", phone_key
+    ), f"Phone key has unexpected format: {phone_key!r}"
 
 
 @pytest.mark.asyncio
@@ -169,9 +163,7 @@ async def test_phone_blocked_short_circuits() -> None:
     stub_settings = _make_settings_stub()
 
     with patch("app.security.rate_limiter.settings", stub_settings):
-        result = await check_rate_limit(
-            stub, phone="+573001234567", poliza_id="POL-001"
-        )
+        result = await check_rate_limit(stub, phone="+573001234567", poliza_id="POL-001")
 
     assert result == RateLimitResult(allowed=False, scope="phone")
     assert len(stub.calls) == 1  # no poliza or global eval
@@ -221,56 +213,59 @@ async def test_disabled_returns_allowed_with_zero_evals() -> None:
     stub_settings = _make_settings_stub(enabled=False)
 
     with patch("app.security.rate_limiter.settings", stub_settings):
-        result = await check_rate_limit(
-            stub, phone="+573001234567", poliza_id="POL-001"
-        )
+        result = await check_rate_limit(stub, phone="+573001234567", poliza_id="POL-001")
 
     assert result == RateLimitResult(allowed=True, scope=None)
     assert len(stub.calls) == 0
 
 
 @pytest.mark.asyncio
-async def test_approaching_threshold_allowed_but_warning(caplog: Any) -> None:
+async def test_approaching_threshold_allowed_but_warning() -> None:
     """Count >= 80% of limit -> allowed=True but rate_limit.approaching logged."""
-    import logging
+    from unittest.mock import MagicMock
+
     from app.security.rate_limiter import check_rate_limit
 
-    # phone_limit=10, 80% threshold = 8.  Return 8 (>= 8) for phone eval, 1 for global.
+    # phone_limit=10, 80% threshold = ceil(10 * 0.8) = 8.
+    # Stub: phone eval returns 8 (approaching), global returns 1 (ok).
     stub = _StubRedis(responses=[8, 1])
     stub_settings = _make_settings_stub(phone_limit=10)
 
-    with caplog.at_level(logging.WARNING):
-        with patch("app.security.rate_limiter.settings", stub_settings):
+    warning_calls: list[tuple[Any, ...]] = []
+    mock_log = MagicMock()
+    mock_log.warning.side_effect = lambda event, **kw: warning_calls.append((event, kw))
+    mock_log.error.return_value = None
+
+    with patch("app.security.rate_limiter.settings", stub_settings):
+        with patch("app.security.rate_limiter.log", mock_log):
             result = await check_rate_limit(stub, phone="+573001234567")
 
     assert result.allowed is True
-    # Verify the approaching warning was emitted via structlog -> stdlib bridge
-    # (structlog in tests routes through stdlib logging)
-    warning_records = [r for r in caplog.records if "approaching" in r.getMessage()]
-    assert warning_records, (
-        "Expected rate_limit.approaching warning in logs, got none. "
-        f"All records: {[r.getMessage() for r in caplog.records]}"
-    )
+    approaching_calls = [c for c in warning_calls if "approaching" in c[0]]
+    assert approaching_calls, f"Expected rate_limit.approaching warning call, got: {warning_calls}"
 
 
 @pytest.mark.asyncio
-async def test_exceeded_logs_warning(caplog: Any) -> None:
+async def test_exceeded_logs_warning() -> None:
     """Phone level returning -1 should emit rate_limit.exceeded warning."""
-    import logging
+    from unittest.mock import MagicMock
+
     from app.security.rate_limiter import check_rate_limit
 
     stub = _StubRedis(responses=[-1])
     stub_settings = _make_settings_stub()
 
-    with caplog.at_level(logging.WARNING):
-        with patch("app.security.rate_limiter.settings", stub_settings):
+    warning_calls: list[tuple[Any, ...]] = []
+    mock_log = MagicMock()
+    mock_log.warning.side_effect = lambda event, **kw: warning_calls.append((event, kw))
+    mock_log.error.return_value = None
+
+    with patch("app.security.rate_limiter.settings", stub_settings):
+        with patch("app.security.rate_limiter.log", mock_log):
             await check_rate_limit(stub, phone="+573001234567")
 
-    exceeded_records = [r for r in caplog.records if "exceeded" in r.getMessage()]
-    assert exceeded_records, (
-        "Expected rate_limit.exceeded warning in logs. "
-        f"Got: {[r.getMessage() for r in caplog.records]}"
-    )
+    exceeded_calls = [c for c in warning_calls if "exceeded" in c[0]]
+    assert exceeded_calls, f"Expected rate_limit.exceeded warning call, got: {warning_calls}"
 
 
 def test_t_rate_limited_is_string() -> None:
@@ -320,7 +315,9 @@ async def test_integration_phone_limit_blocks() -> None:
     Uses a unique UUID phone to avoid collisions between test runs.
     """
     import uuid
+
     import redis.asyncio as aioredis
+
     from app.security.rate_limiter import RateLimitResult, check_rate_limit
 
     phone = f"+1{uuid.uuid4().hex[:10]}"  # unique per run, E.164-ish
@@ -332,13 +329,11 @@ async def test_integration_phone_limit_blocks() -> None:
         with patch("app.security.rate_limiter.settings", stub_settings):
             for i in range(5):
                 result = await check_rate_limit(client, phone=phone)
-                assert result.allowed is True, (
-                    f"Call {i+1}/5 should be allowed, got blocked"
-                )
+                assert result.allowed is True, f"Call {i+1}/5 should be allowed, got blocked"
             # 6th call must be blocked (exceeded phone_limit=5)
             result = await check_rate_limit(client, phone=phone)
-            assert result == RateLimitResult(allowed=False, scope="phone"), (
-                f"6th call should be blocked by phone scope, got: {result}"
-            )
+            assert result == RateLimitResult(
+                allowed=False, scope="phone"
+            ), f"6th call should be blocked by phone scope, got: {result}"
     finally:
         await client.aclose()
