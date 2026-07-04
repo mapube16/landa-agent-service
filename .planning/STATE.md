@@ -2,13 +2,14 @@
 gsd_state_version: 1.0
 milestone: v18.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-07-04T15:16:26.579Z"
+status: in_progress
+last_updated: "2026-07-04T18:00:00.000Z"
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 36
-  completed_plans: 29
+  completed_plans: 30
+stopped_at: "Completed 05-07-PLAN.md (final plan of phase 05-seguridad-y-audit-log)"
 ---
 
 ## Decisions
@@ -27,6 +28,11 @@ progress:
 - [Phase 05-02]: JB-01 (Spanish ignore variant) classified judge_mock — Spanish does not trigger English-only firewall patterns; integration tests gated on INTEGRATION_LLM not OPENROUTER_API_KEY (conftest always sets the latter to fake); judge_retries=1 in test state forces single-shot escalation
 - [Phase 05-06]: Cartera exemption via structural ordering: rate_limit placed AFTER cartera branch in _dispatch_message — no explicit allowlist needed, exemption is a dispatch-order property
 - [Phase 05-06]: outbound_sent gated on sent=True flag (set inside try-block per branch) — does not reorder mirror enqueue, minimal restructuring of _send_outbound
+- [Phase 05-07]: BLOCKED_EXTENSIONS belt-and-suspenders alongside magic-byte primary control; 5 MB cap intentionally conservative vs ROADMAP 10 MB ceiling (ADR-005)
+- [Phase 05-07]: input_sanitizer.py thin re-export of prompt_firewall.sanitize — satisfies CLAUDE.md structure contract without logic duplication (RESEARCH OQ-4)
+- [Phase 05-07]: Egress CI guard via static regex scan of app/ — compensating control for Railway hobby plan network gap (ADR-006)
+- [Phase 05-07]: Layer 4 tool output sanitization re-verified as DONE — RESEARCH PARTIAL status was incorrect; sanitize_tool_output() in tools.py implements both field allowlist and _INJECTION_STRIP
+- [Phase 05-07]: 13/13 security layers implemented-or-ADR-compensated; Phase 5 fully closed
 
 ## Performance Metrics
 
@@ -42,4 +48,5 @@ progress:
 | 05 | 05-04 | 35 | 2 | 3 |
 | 05 | 05-05 | 30 | 2 | 3 |
 | Phase 05 P06 | 52 | 2 tasks | 2 files |
+| 05 | 05-07 | 25 | 3 | 7 |
 

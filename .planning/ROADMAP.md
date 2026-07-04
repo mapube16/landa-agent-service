@@ -207,13 +207,13 @@ Note: CONTEXT D-08 supersedes the Meta v18.0 wording above — the actual plans 
 **Out of scope this phase**: integración con voice agent.
 
 **Plans** (finalized 2026-07-04 — 7 plans, 4 waves; requirement IDs SEC-01..SEC-09 mapped in each plan):
-- [ ] `05-01-PLAN.md` — Audit log core: migration 0003 + trigger append-only + hash chain + emit/emit_task/verify + AuditSettings/RateLimitSettings (Wave 1)
-- [ ] `05-02-PLAN.md` — Adversarial test suite: JAILBREAK_CATALOG firewall + judge-mock layers + CI `-m "not integration"` (Wave 1)
-- [ ] `05-03-PLAN.md` — Rate limiter core: Lua sliding window 3 niveles (phone/poliza/global) + alertas (Wave 2)
-- [ ] `05-04-PLAN.md` — Audit capture en grafo: llm_turn, tool_call, judge_decision, escalation, payment_approved/rejected (Wave 2)
-- [ ] `05-05-PLAN.md` — Worker: attachment_received + verify_audit_chain cron + sink NDJSON append-only en volumen (Wave 2)
-- [ ] `05-06-PLAN.md` — Webhook wiring: rate limit en _dispatch_message (cartera exenta) + outbound_sent/blocked audit (Wave 3)
-- [ ] `05-07-PLAN.md` — Retrospectiva 13 capas + ADR-005 malware + ADR-006 egress + attachment hardening + egress CI guard (Wave 4)
+- [x] `05-01-PLAN.md` — Audit log core: migration 0003 + trigger append-only + hash chain + emit/emit_task/verify + AuditSettings/RateLimitSettings (Wave 1)
+- [x] `05-02-PLAN.md` — Adversarial test suite: JAILBREAK_CATALOG firewall + judge-mock layers + CI `-m "not integration"` (Wave 1)
+- [x] `05-03-PLAN.md` — Rate limiter core: Lua sliding window 3 niveles (phone/poliza/global) + alertas (Wave 2)
+- [x] `05-04-PLAN.md` — Audit capture en grafo: llm_turn, tool_call, judge_decision, escalation, payment_approved/rejected (Wave 2)
+- [x] `05-05-PLAN.md` — Worker: attachment_received + verify_audit_chain cron + sink NDJSON append-only en volumen (Wave 2)
+- [x] `05-06-PLAN.md` — Webhook wiring: rate limit en _dispatch_message (cartera exenta) + outbound_sent/blocked audit (Wave 3)
+- [x] `05-07-PLAN.md` — Retrospectiva 13 capas + ADR-005 malware + ADR-006 egress + attachment hardening + egress CI guard (Wave 4)
 
 ---
 
