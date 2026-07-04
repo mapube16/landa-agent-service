@@ -13,16 +13,25 @@ app share the same Redis source-of-truth.
 Phase milestones for this file:
   - F1: ``_noop`` placeholder so ``arq app.worker.WorkerSettings`` boots
   - F3: ``mirror_inbound`` + ``mirror_outbound`` (this plan, 03-03)
+  - F4: ``process_attachment`` payment comprobante processing (04-04)
+  - F6: ``check_pending_cases`` + ``cleanup_attachments_90d`` cron jobs (04-06)
   - F5: audit log fan-out, rate-limit token resets
+
+OPERATOR NOTE -- agent-worker Railway service does NOT auto-deploy on git push
+(see .planning/phases/03-bot-q-a-inbound-chatwoot-mirror/03-06-SMOKE.md
+section "Live Smoke Findings"). After merging changes to this file you MUST run:
+    railway up --service agent-worker --ci --detach
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from arq import cron
 from arq.connections import RedisSettings
 
 from app.config.settings import settings
+from app.features.payment.scheduler import check_pending_cases, cleanup_attachments_90d
 
 
 async def mirror_inbound(ctx: dict[str, Any], *, phone: str, text: str, wamid: str) -> None:
@@ -159,10 +168,30 @@ class WorkerSettings:
 
     F3: Chatwoot mirror jobs (incoming + outgoing).
     F4: Payment comprobante async processing (process_attachment).
+    F6: Business-hours-aware timer scheduler + 90-day attachment cleanup.
     F5: audit log fan-out, rate-limit token resets.
     """
 
-    functions: list[Any] = [mirror_inbound, mirror_outbound, process_attachment]
+    functions: list[Any] = [
+        mirror_inbound,
+        mirror_outbound,
+        process_attachment,
+        check_pending_cases,
+        cleanup_attachments_90d,
+    ]
+
+    # cron_jobs — two scheduled jobs (Plan 04-06):
+    #   check_pending_cases: every minute during business hours (D-10/D-11/D-12).
+    #     minute=set(range(60)) is ARQ's "every minute of every hour" form.
+    #     The job itself bails immediately if outside business hours, so the
+    #     frequent schedule has negligible overhead off-hours.
+    #   cleanup_attachments_90d: daily at 02:00 UTC (21:00 Bogota Sunday),
+    #     low-traffic window to minimise DB contention (D-02).
+    cron_jobs: list[Any] = [
+        cron(check_pending_cases, minute=set(range(60))),
+        cron(cleanup_attachments_90d, hour={2}, minute={0}),
+    ]
+
     redis_settings: RedisSettings = RedisSettings.from_dsn(settings.redis.url.get_secret_value())
 
     @staticmethod
