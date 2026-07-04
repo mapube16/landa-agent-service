@@ -450,6 +450,29 @@ async def test_post_document_message_enqueues_process_attachment(
     meta_mock.send_media_ack.assert_not_called()
 
 
+async def test_post_document_blocked_extension_not_enqueued(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+) -> None:
+    """SEC-08 (05-07): a document with a blocked extension (.exe) is rejected
+    at the webhook — nothing is enqueued, never reaches worker or cartera."""
+    meta_mock, _redis, _qa, arq_mock = stub_app_state_f3
+    body = _inbound_document_payload(
+        message_id="wamid.exe1",
+        media_id="EXE-1",
+        mime_type="application/pdf",
+    ).replace(b"comprobante.pdf", b"malware.exe")
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    arq_mock.enqueue_job.assert_not_called()
+    meta_mock.send_text.assert_not_called()
+
+
 async def test_post_status_update_acknowledged_without_dispatch(
     client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
 ) -> None:

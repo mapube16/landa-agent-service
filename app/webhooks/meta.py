@@ -57,6 +57,7 @@ from pydantic import ValidationError
 
 from app.config.settings import settings
 from app.features.handoff.echo import is_echo_allowed
+from app.features.payment.attachment import has_blocked_extension
 from app.features.payment.cartera import handle_cartera_message
 from app.features.qa.messages import ESCAPE_REGEX, T_06
 from app.integrations.meta_cloud import _hash_phone
@@ -554,6 +555,19 @@ async def _handle_comprobante(*, msg: InboundMessage, request: Request, phone_ha
             phone_hash=phone_hash,
             reason="missing_media_or_arq",
             result="error",
+        )
+        return
+
+    # SEC-08 (Plan 05-07): reject dangerous declared file types before enqueue,
+    # so an executable never reaches the worker or cartera. Belt-and-suspenders
+    # over the worker's magic-byte gate; documents carry a filename (images do
+    # not). See attachment.BLOCKED_EXTENSIONS.
+    if has_blocked_extension(getattr(media, "filename", None)):
+        log.warning(
+            "webhook.comprobante.blocked_extension",
+            message_id=msg.id,
+            phone_hash=phone_hash,
+            result="blocked_extension",
         )
         return
     try:
