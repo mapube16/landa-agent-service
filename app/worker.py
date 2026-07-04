@@ -65,14 +65,104 @@ async def mirror_outbound(ctx: dict[str, Any], *, phone: str, text: str, wamid: 
     await chatwoot.post_message(conv_id, text, message_type="outgoing")
 
 
+async def process_attachment(
+    ctx: dict[str, Any],
+    *,
+    phone: str,
+    media_id: str,
+    mime_type: str,
+    wamid: str,
+) -> None:
+    """Drive the payment graph for an inbound comprobante.
+
+    Enqueued by ``app/webhooks/meta.py`` whenever a client sends an image or
+    document. Runs asynchronously so the HTTP webhook returns fast (< 5s Meta
+    timeout).
+
+    The job:
+    1. Resolves or builds the compiled QA/payment graph from ctx or builds it
+       fresh with the shared checkpointer.
+    2. Injects ``_inbound_media`` into graph state so ``node_receive_comprobante``
+       can pick it up.
+    3. Invokes ``graph.ainvoke(None, config)`` which drives:
+       receive → forward → awaiting_cartera (which calls interrupt() and persists
+       checkpoint). Graph execution suspends at interrupt() and the function
+       returns normally; Plan 04-05 resumes via ``aupdate_state``.
+
+    Args:
+        ctx: ARQ worker context. May carry ``qa_graph`` and ``checkpointer``
+            if the worker lifespan sets them (future phase). Otherwise builds
+            graph ad-hoc using the shared checkpointer from settings.
+        phone: Sender's E.164 phone (used as LangGraph thread_id).
+        media_id: Meta CDN media_id for the comprobante.
+        mime_type: Declared MIME type from the webhook.
+        wamid: Meta message ID for idempotency.
+    """
+    # ponytail: local imports keep cold-start light + avoid circular deps.
+    from app.config.checkpointer import build_checkpointer_cm
+    from app.features.qa.graph import build_qa_graph
+
+    # Try to reuse a graph already compiled in the worker lifespan.
+    # If not available (worker deployed before lifespan wires it), build fresh.
+    graph = ctx.get("qa_graph")
+    if graph is None:
+        # Build ad-hoc with a fresh checkpointer context.
+        # Note: this opens/closes the checkpointer on every job when no lifespan
+        # graph exists. Operator step in Plan 04-06: wire qa_graph into worker
+        # on_startup to avoid repeated checkpointer init overhead.
+        cp_cm = build_checkpointer_cm()
+        checkpointer = await cp_cm.__aenter__()
+        try:
+            await checkpointer.setup()
+            graph = build_qa_graph().compile(checkpointer=checkpointer)
+            config: dict[str, Any] = {"configurable": {"thread_id": phone}}
+            await graph.aupdate_state(
+                config,
+                values={
+                    "payment_status": "awaiting_receipt",
+                    "_inbound_media": {
+                        "media_id": media_id,
+                        "mime_type": mime_type,
+                        "wamid": wamid,
+                    },
+                    "wa_phone": phone,
+                    "thread_id": phone,
+                },
+                as_node=None,
+            )
+            await graph.ainvoke(None, config=config)
+        finally:
+            await cp_cm.__aexit__(None, None, None)
+        return
+
+    # Fast path: use pre-compiled graph from worker lifespan.
+    config = {"configurable": {"thread_id": phone}}
+    await graph.aupdate_state(
+        config,
+        values={
+            "payment_status": "awaiting_receipt",
+            "_inbound_media": {
+                "media_id": media_id,
+                "mime_type": mime_type,
+                "wamid": wamid,
+            },
+            "wa_phone": phone,
+            "thread_id": phone,
+        },
+        as_node=None,
+    )
+    await graph.ainvoke(None, config=config)
+
+
 class WorkerSettings:
     """ARQ worker configuration.
 
     F3: Chatwoot mirror jobs (incoming + outgoing).
+    F4: Payment comprobante async processing (process_attachment).
     F5: audit log fan-out, rate-limit token resets.
     """
 
-    functions: list[Any] = [mirror_inbound, mirror_outbound]
+    functions: list[Any] = [mirror_inbound, mirror_outbound, process_attachment]
     redis_settings: RedisSettings = RedisSettings.from_dsn(settings.redis.url.get_secret_value())
 
     @staticmethod

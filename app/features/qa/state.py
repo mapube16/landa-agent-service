@@ -110,6 +110,13 @@ class QAState(TypedDict, total=False):
     ]
     cartera_message_wamid: NotRequired[str | None]
     payment_approved: NotRequired[bool]
+    # Transient field injected by process_attachment ARQ job before ainvoke.
+    # Carries the inbound media metadata for node_receive_comprobante.
+    # NEVER passed to any LLM (D-27).
+    _inbound_media: NotRequired[dict[str, str] | None]
+    # cliente_nombre is part of the comprobante caption (D-08). Set by
+    # node_identify when identification succeeds, or from a case handoff.
+    cliente_nombre: NotRequired[str | None]
 
 
 __all__ = ["QAState"]
