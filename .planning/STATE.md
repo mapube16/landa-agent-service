@@ -2,13 +2,16 @@
 gsd_state_version: 1.0
 milestone: v18.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-07-04T05:13:25.418Z"
+status: in-progress
+last_updated: "2026-07-04T12:37:32Z"
+stopped_at: "Completed 05-01-PLAN.md"
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 29
-  completed_plans: 23
+  completed_plans: 24
+  current_phase: "05-seguridad-y-audit-log"
+  current_plan: "05-02"
 ---
 
 ## Decisions
@@ -23,6 +26,7 @@ progress:
 - [Phase 04-06]: _now_utc and _get_settings_payment are module-level callables for monkeypatching without touching real singletons
 - [Phase 04-06]: cron(check_pending_cases, minute=set(range(60))) fires every minute; off-hours gate bails immediately so overhead is negligible
 - [Phase 04]: D-28 gate placed at top of _send_outbound (early return on block); payment_approved forwarded as ARQ primitive kwarg for mirror re-check
+- [Phase 05-01]: metadata_json Python attribute maps SQL 'metadata' column (SQLAlchemy reserved attr conflict); AuditPayload RootModel rejects floats/nested; emit/emit_task fully fail-open; pg_advisory_xact_lock serializes chain inserts (v1); pre-existing mypy errors in app/features/payment/ are deferred (out of scope)
 
 ## Performance Metrics
 
@@ -32,4 +36,5 @@ progress:
 | 04 | 04-05 | 45 | 2 | 4 |
 | Phase 04 P06 | 9 | 2 tasks | 4 files |
 | Phase 04 P04-08 | 45 | 2 tasks | 8 files |
+| 05 | 05-01 | 23 | 3 | 8 |
 
