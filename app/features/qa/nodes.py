@@ -21,6 +21,7 @@ node functions set, so the graph edges are data-driven.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -35,6 +36,7 @@ from app.features.qa.state import QAState
 from app.features.qa.tools import escalate_to_human, get_coberturas, get_estado, get_saldo
 from app.integrations.openrouter import get_llm
 from app.integrations.softseguros import get_softseguros_client
+from app.security import audit_log
 from app.security.judge import is_approved, judge_response
 
 log = structlog.get_logger("features.qa.nodes")
@@ -421,6 +423,7 @@ async def node_answer(state: QAState) -> dict[str, Any]:
         }
 
     poliza_id: str | None = state.get("poliza_id")
+    conv_id: str | None = state.get("thread_id") or state.get("conversation_id")
     judge_retries: int = state.get("judge_retries", 0)
     last_rationale: str | None = state.get("last_rejection_rationale")
 
@@ -438,6 +441,21 @@ async def node_answer(state: QAState) -> dict[str, Any]:
     # First LLM call
     result = await llm.ainvoke(messages_with_system)
 
+    # Audit: llm_turn — fire-and-forget, never raises (05-01 guarantee)
+    audit_log.emit_task(
+        action="llm_turn",
+        actor="bot",
+        conversation_id=conv_id,
+        poliza_id=poliza_id,
+        payload={
+            "model_role": "conversation",
+            "response_sha256": hashlib.sha256(
+                str(getattr(result, "content", result)).encode()
+            ).hexdigest(),
+            "has_tool_calls": bool(getattr(result, "tool_calls", None)),
+        },
+    )
+
     # Check for escalate_to_human tool call (escape hatch Layer 2)
     if hasattr(result, "tool_calls") and result.tool_calls:
         for tc in result.tool_calls:
@@ -447,6 +465,17 @@ async def node_answer(state: QAState) -> dict[str, Any]:
                     "escalation_reason": "escape_hatch",
                     "messages": [AIMessage(content=T_08)],
                 }
+
+        # Audit: tool_call — comma-joined tool names, never raises (05-01 guarantee)
+        audit_log.emit_task(
+            action="tool_call",
+            actor="bot",
+            conversation_id=conv_id,
+            poliza_id=poliza_id,
+            payload={
+                "tools": ",".join(tc.get("name", "") for tc in result.tool_calls),
+            },
+        )
 
         # Execute other tool calls via ToolNode pattern (manual execution)
         from langgraph.prebuilt import ToolNode
@@ -473,6 +502,22 @@ async def node_answer(state: QAState) -> dict[str, Any]:
 
     # Judge pipeline
     rubric = await judge_response(state["messages"], final_response)
+
+    # Audit: judge_decision — emit before branching on approval (05-01 guarantee)
+    if rubric is not None:
+        audit_log.emit_task(
+            action="judge_decision",
+            actor="judge",
+            conversation_id=conv_id,
+            poliza_id=poliza_id,
+            payload={
+                "approved": bool(is_approved(rubric)),
+                **{
+                    f"flag_{k}": bool(v) for k, v in rubric.model_dump().items() if k != "rationale"
+                },
+            },
+        )
+
     if rubric is None or not is_approved(rubric):
         if judge_retries >= 1:
             return {
@@ -548,6 +593,16 @@ async def node_escalate(state: QAState) -> dict[str, Any]:
     """Log escalation reason. Side effects (Chatwoot, meta) handled by webhook dispatcher."""
     reason = state.get("escalation_reason", "unknown")
     log.info("node_escalate.terminal", reason=reason)
+
+    # Audit: escalation — fire-and-forget, never raises (05-01 guarantee)
+    audit_log.emit_task(
+        action="escalation",
+        actor="bot",
+        conversation_id=state.get("thread_id") or state.get("conversation_id"),
+        poliza_id=state.get("poliza_id"),
+        payload={"reason": str(reason)},
+    )
+
     # Template already set by upstream node — return no-op dict
     return {"node": "escalating"}
 
