@@ -8,9 +8,9 @@ Endpoints (D-09):
   match, 403 otherwise.
 - ``POST /webhooks/meta`` — Inbound message events.
 
-**INVARIANT — D-15 message processing order:**
+**INVARIANT — D-15 message processing order (Plan 04-05 extension):**
 
-    HMAC -> parse -> dedup -> allowlist -> firewall -> graph dispatch
+    HMAC -> parse -> dedup -> cartera-allowlist -> client-allowlist -> firewall -> graph dispatch
 
 This order is **not negotiable**. Reordering breaks the threat model:
 
@@ -42,6 +42,7 @@ import asyncio
 import hashlib
 import hmac
 import re
+from functools import lru_cache
 from typing import Any
 
 import structlog
@@ -52,6 +53,7 @@ from pydantic import ValidationError
 
 from app.config.settings import settings
 from app.features.handoff.echo import is_echo_allowed
+from app.features.payment.cartera import handle_cartera_message
 from app.features.qa.messages import ESCAPE_REGEX, T_06
 from app.integrations.meta_cloud import _hash_phone
 from app.models.meta import InboundEnvelope, InboundMessage, MessageText
@@ -72,6 +74,21 @@ def _normalize_e164(raw: str) -> str:
     """Return ``raw`` always prefixed with ``'+'``. Idempotent."""
     raw = raw.strip()
     return raw if raw.startswith("+") else "+" + raw
+
+
+@lru_cache(maxsize=1)
+def _get_cartera_allowlist() -> frozenset[str]:
+    """Return the CARTERA_PHONE_ALLOWLIST as a frozenset of E.164 numbers.
+
+    Cached at process start via ``lru_cache(maxsize=1)`` so the env var is
+    read once — same pattern as ``get_meta_client()``.  Tests patch this
+    function directly to avoid lru_cache staleness.
+
+    Security (T-04-05-01): this is the sole source-of-truth for cartera
+    number authorisation. The allowlist is set by the operator via env var
+    and validated as E.164 by ``PaymentSettings.cartera_phone_allowlist``.
+    """
+    return settings.payment.cartera_phone_allowlist
 
 
 def _verify_signature(raw_body: bytes, header_value: str, secret: str) -> bool:
@@ -234,7 +251,10 @@ async def verify(
 
 @router.post("/meta")
 async def receive(request: Request) -> Response:
-    """Receive Meta webhook events (HMAC -> parse -> dedup -> allowlist -> firewall -> graph).
+    """Receive Meta webhook events.
+
+    Processing order (D-15 + Plan 04-05):
+    HMAC -> parse -> dedup -> cartera-allowlist -> client-allowlist -> firewall -> graph
 
     Returns HTTP 200 once HMAC succeeds, regardless of downstream
     decisions (skip, dedup-hit, dispatch). Returning 5xx would make
@@ -413,7 +433,9 @@ async def _handle_text_message(
 async def _dispatch_message(
     *, msg: InboundMessage, meta: Any, redis: Any, request: Request
 ) -> None:
-    """Apply dedup -> allowlist -> firewall -> graph dispatch, in that order (D-15).
+    """Apply D-15 + Plan 04-05 dispatch order.
+
+    Order: dedup -> cartera-allowlist -> client-allowlist -> firewall -> graph dispatch.
 
     ``meta`` and ``redis`` are typed ``Any`` because their concrete types
     live in ``app.state`` (MetaCloudClient and redis.asyncio.Redis) and
@@ -434,8 +456,31 @@ async def _dispatch_message(
         return
 
     phone_hash = _hash_phone(msg.from_)
+    normalized_from = _normalize_e164(msg.from_)
 
-    # 4c. Allowlist (D-02 + Pitfall 8 E.164 normalization).
+    # 4c. Cartera allowlist (D-06, Plan 04-05) — BEFORE client allowlist.
+    #     Cartera taps must reach handle_cartera_message; they must NOT go
+    #     through the client Q&A path (T-04-05-01).
+    cartera_allow = _get_cartera_allowlist()
+    if normalized_from in cartera_allow:
+        log.info(
+            "meta.webhook.routing_cartera",
+            message_id=msg.id,
+            from_hash=phone_hash,
+            result="routed_cartera",
+        )
+        app_state = request.app.state
+        await handle_cartera_message(
+            msg=msg,
+            qa_graph=app_state.qa_graph,
+            meta_client=app_state.meta,
+            db_session_factory=getattr(app_state, "db_session_factory", None),
+        )
+        return
+
+    # 4d. Client allowlist (D-02 + Pitfall 8 E.164 normalization).
+    #     Unknown numbers (not cartera, not client) are silently dropped here
+    #     — no outbound, no ARQ enqueue (T-04-05-04, D-06).
     if not is_echo_allowed(msg.from_):
         log.info(
             "webhook.ignored.not_allowlisted",
@@ -446,12 +491,12 @@ async def _dispatch_message(
         )
         return
 
-    # 4d. Text message: firewall + escape hatch + graph dispatch (Plan 03-05).
+    # 4e. Text message: firewall + escape hatch + graph dispatch (Plan 03-05).
     if msg.type == "text" and msg.text is not None:
         await _handle_text_message(msg=msg, meta=meta, phone_hash=phone_hash, request=request)
         return
 
-    # 4d'. Interactive reply (button tap / list pick): treat the selected id
+    # 4e'. Interactive reply (button tap / list pick): treat the selected id
     # as the user's text input so node_choose_policy / node_answer route the
     # conversation just like a typed reply.
     if msg.type == "interactive" and msg.interactive is not None:
