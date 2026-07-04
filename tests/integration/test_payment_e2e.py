@@ -14,10 +14,7 @@ Tests use @pytest.mark.integration so they can be filtered with -m integration.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
-import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -29,10 +26,8 @@ from httpx import ASGITransport, AsyncClient
 
 from tests.integration.conftest import (
     CARTERA_PHONE,
-    CHATWOOT_SECRET,
     CLIENT_PHONE,
     LAMBDA_TOKEN,
-    META_SECRET,
     UNKNOWN_PHONE,
     _FakeSession,
     build_inbound_image,

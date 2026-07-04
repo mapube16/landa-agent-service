@@ -18,10 +18,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
-import tempfile
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -182,7 +178,7 @@ class _FakeResult:
     def __init__(self, rows: list[Any]) -> None:
         self._rows = rows
 
-    def scalars(self) -> "_FakeResult":
+    def scalars(self) -> _FakeResult:
         return self
 
     def first(self) -> Any:
