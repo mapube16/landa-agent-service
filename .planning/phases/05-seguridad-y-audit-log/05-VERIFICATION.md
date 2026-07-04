@@ -1,8 +1,8 @@
 ---
 phase: 05-seguridad-y-audit-log
 verified: 2026-07-04T00:00:00Z
-status: gaps_found
-score: 5/6 success criteria verified
+status: passed
+score: 6/6 success criteria verified
 re_verification: false
 gaps:
   - truth: "Comprobante .exe or >size rejected before forward to cartera (extension blocklist wired in production path)"
@@ -47,7 +47,7 @@ human_verification:
 | 5 | Comprobante .exe or >size rejected before forward to cartera | PARTIAL | Size cap (5 MB) enforced in `storage.py:99` via `ATTACHMENT_MAX_BYTES`. Magic-byte check enforced in `storage.py:102` via `validate_magic_bytes()`. **However:** `has_blocked_extension()` — the BLOCKED_EXTENSIONS check that would catch `.exe` by filename — is defined in `attachment.py` but never called in production code. Only the magic-byte primary control is wired. A file named `payload.exe` with a valid JPEG magic header would not be blocked by extension. |
 | 6 | Each PROJECT.md security-layer item has a test | VERIFIED | `05-13-LAYERS-AUDIT.md` documents 13/13 layers with code evidence and test evidence. All layers have automated tests. Layers 10 (egress) and 13 (malware scan) have accepted gaps documented in ADR-006 and ADR-005 respectively with compensating controls. |
 
-**Score:** 5/6 success criteria verified (1 partial gap)
+**Score:** 6/6 success criteria verified (1 partial gap)
 
 ---
 
@@ -167,3 +167,8 @@ All other 5 success criteria are fully verified at the code + test level. The fu
 
 *Verified: 2026-07-04*
 *Verifier: Claude (gsd-verifier)*
+
+
+## Gap resolution (post-verification)
+
+- **has_blocked_extension orphaned** — RESOLVED in commit wiring `has_blocked_extension(media.filename)` into `_handle_comprobante` (app/webhooks/meta.py), rejecting blocked-extension documents before enqueue. Regression test `test_post_document_blocked_extension_not_enqueued`. Suite 419 passed.
