@@ -21,7 +21,7 @@ Security invariants:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
@@ -102,12 +102,7 @@ async def _get_or_create_case(
 
     from app.memory.case_store import Case
 
-    stmt = (
-        sa.select(Case)
-        .where(Case.phone == phone)
-        .order_by(Case.created_at.desc())
-        .limit(1)
-    )
+    stmt = sa.select(Case).where(Case.phone == phone).order_by(Case.created_at.desc()).limit(1)
     result = await session.execute(stmt)
     existing = result.scalars().first()
 
@@ -150,14 +145,12 @@ async def node_receive_comprobante(state: dict[str, Any]) -> dict[str, Any]:
     Security (D-27): comprobante bytes are NEVER added to ``state["messages"]``
     or passed to any LLM.
     """
-    import sqlalchemy as sa
 
     from app.memory.case_store import Attachment
 
     meta = _get_meta()
     inbound: dict[str, Any] = state.get("_inbound_media") or {}
     media_id: str = inbound.get("media_id", "")
-    mime_type: str = inbound.get("mime_type", "image/jpeg")
     wamid: str = inbound.get("wamid", "")
     phone: str = state.get("wa_phone") or state.get("thread_id", "")
     poliza_id: str | None = state.get("poliza_id")
@@ -246,7 +239,7 @@ async def node_forward_to_cartera(state: dict[str, Any]) -> dict[str, Any]:
     poliza_id: str | None = state.get("poliza_id")
     cliente_doc: str | None = state.get("cliente_doc")
     cliente_nombre: str | None = state.get("cliente_nombre") or "Cliente"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # D-13: outside business hours → ack + defer
     if not is_business_time(now):
@@ -261,9 +254,7 @@ async def node_forward_to_cartera(state: dict[str, Any]) -> dict[str, Any]:
         due_at = next_window + timedelta(minutes=20)
 
         async with _make_session_ctx() as session:
-            result = await session.execute(
-                sa.select(Case).where(Case.case_id == case_id)
-            )
+            result = await session.execute(sa.select(Case).where(Case.case_id == case_id))
             case = result.scalars().first()
             if case:
                 case.work_hours_due_at = due_at
@@ -285,7 +276,7 @@ async def node_forward_to_cartera(state: dict[str, Any]) -> dict[str, Any]:
         conv_id = await chatwoot.get_or_create_conversation(phone)
         await chatwoot.post_message(
             conv_id,
-            f"ERROR: CARTERA_PHONE_ALLOWLIST vacio — caso {case_id} no pudo ser reenviado a cartera.",
+            f"ERROR: CARTERA_PHONE_ALLOWLIST vacio — caso {case_id} no reenviado.",
             message_type="outgoing",
         )
         return {"payment_status": "escalated"}
@@ -296,9 +287,7 @@ async def node_forward_to_cartera(state: dict[str, Any]) -> dict[str, Any]:
 
     # Load case + attachments from DB.
     async with _make_session_ctx() as session:
-        result = await session.execute(
-            sa.select(Case).where(Case.case_id == case_id)
-        )
+        result = await session.execute(sa.select(Case).where(Case.case_id == case_id))
         case = result.scalars().first()
         if case is None:
             log.error("payment.forward.case_not_found", case_id=case_id)
@@ -315,7 +304,8 @@ async def node_forward_to_cartera(state: dict[str, Any]) -> dict[str, Any]:
         nombre = case.cliente_nombre or cliente_nombre
         doc = case.cliente_doc or cliente_doc or "N/A"
         poliza = case.poliza_id or poliza_id or "N/A"
-        ts_co = (case.created_at or now).strftime("%Y-%m-%d %H:%M") if case.created_at else now.strftime("%Y-%m-%d %H:%M")
+        created = case.created_at or now
+        ts_co = created.strftime("%Y-%m-%d %H:%M")
 
         last_wamid: str = ""
         for idx, att in enumerate(attachments, start=1):
@@ -381,9 +371,7 @@ async def node_awaiting_cartera(state: dict[str, Any]) -> dict[str, Any]:
 
     # interrupt() suspends execution here; resumes with the dict that
     # Plan 04-05 injects via graph.aupdate_state().
-    decision: dict[str, Any] = interrupt(
-        {"waiting_for": "cartera_tap", "case_id": case_id}
-    )
+    decision: dict[str, Any] = interrupt({"waiting_for": "cartera_tap", "case_id": case_id})
 
     action: str = decision.get("action", "")
     extra: str | None = decision.get("extra")
@@ -480,7 +468,7 @@ async def node_payment_escalate(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     # Update case status.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with _make_session_ctx() as session:
         result = await session.execute(sa.select(Case).where(Case.case_id == case_id))
         case = result.scalars().first()

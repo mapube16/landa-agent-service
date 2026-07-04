@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config.settings import settings
@@ -61,7 +61,7 @@ def build_attachment_path(
     if ext is None:
         raise ValueError(f"unsupported_mime_type: {mime!r}")
 
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     ts = now.strftime("%Y%m%dT%H%M%SZ")
     safe_wamid = _sanitize_wamid(wamid)
 

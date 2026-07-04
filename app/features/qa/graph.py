@@ -48,9 +48,7 @@ from app.features.qa.nodes import (
 from app.features.qa.state import QAState
 
 # Payment statuses that indicate an active or ongoing payment flow.
-_PAYMENT_ACTIVE_STATUSES = frozenset(
-    {"awaiting_receipt", "forwarded", "awaiting_cartera"}
-)
+_PAYMENT_ACTIVE_STATUSES = frozenset({"awaiting_receipt", "forwarded", "awaiting_cartera"})
 
 
 def _route_entry(state: dict[str, Any]) -> str:

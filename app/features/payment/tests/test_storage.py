@@ -7,11 +7,10 @@ so no disk write touches the real Railway volume directory.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -46,10 +45,8 @@ class TestBuildAttachmentPath:
         """Path follows ``<volume>/<case_id>/<ts>-<wamid>.<ext>`` layout."""
         from app.features.payment.storage import build_attachment_path
 
-        fixed_now = datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
-        p = build_attachment_path(
-            case_id="abc123", wamid="WA1", mime="image/jpeg", now=fixed_now
-        )
+        fixed_now = datetime(2025, 1, 15, 10, 30, 0, tzinfo=UTC)
+        p = build_attachment_path(case_id="abc123", wamid="WA1", mime="image/jpeg", now=fixed_now)
         assert p.parent == patched_volume / "abc123"
         assert p.name == "20250115T103000Z-WA1.jpg"
 
@@ -121,9 +118,11 @@ class TestStoreAttachment:
             store_attachment(bad_bytes, "case3", "WA30", "image/jpeg")
 
         # No file must have been created
-        assert not any((patched_volume / "case3").glob("*")) if (
-            patched_volume / "case3"
-        ).exists() else True
+        assert (
+            not any((patched_volume / "case3").glob("*"))
+            if (patched_volume / "case3").exists()
+            else True
+        )
 
     def test_rejects_oversize(self, patched_volume: Path) -> None:
         """Data exceeding 5 MB → ValueError("attachment_too_large")."""

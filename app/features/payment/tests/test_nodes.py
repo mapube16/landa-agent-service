@@ -13,7 +13,7 @@ AsyncMock so tests run without real infra.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -271,11 +271,11 @@ class TestNodeForwardToCartera:
         case_obj.poliza_id = "POL123"
         case_obj.cliente_doc = "12345678"
         case_obj.cliente_nombre = "Juan Perez"
-        case_obj.created_at = datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc)
+        case_obj.created_at = datetime(2025, 1, 15, 10, 0, tzinfo=UTC)
 
         def _make_att(i: int) -> MagicMock:
             att = MagicMock(spec=Attachment)
-            att.path = f"/tmp/file{i}.jpg"
+            att.path = f"comprobantes/case/{i}.jpg"  # relative path; no S108
             att.mime_type = "image/jpeg"
             return att
 
@@ -284,9 +284,7 @@ class TestNodeForwardToCartera:
         mock_session.execute.return_value.scalars.return_value.first.return_value = case_obj
 
         # Patch settings.payment.cartera_phone_allowlist
-        monkeypatch.setattr(
-            settings.payment, "cartera_phone_allowlist_raw", "+573009999999"
-        )
+        monkeypatch.setattr(settings.payment, "cartera_phone_allowlist_raw", "+573009999999")
 
         import app.features.payment.nodes as nodes_mod
 
@@ -311,9 +309,7 @@ class TestNodeForwardToCartera:
         # Last call has buttons
         last_kwargs = calls[2].kwargs if calls[2].kwargs else {}
         last_args = calls[2].args if calls[2].args else ()
-        last_buttons = last_kwargs.get("buttons") or (
-            last_args[4] if len(last_args) > 4 else None
-        )
+        last_buttons = last_kwargs.get("buttons") or (last_args[4] if len(last_args) > 4 else None)
         assert last_buttons is not None
         button_ids = [b[0] for b in last_buttons]
         assert any(b.startswith("aprobar|") for b in button_ids)
@@ -341,18 +337,16 @@ class TestNodeForwardToCartera:
         case_obj.poliza_id = "POL123"
         case_obj.cliente_doc = "12345678"
         case_obj.cliente_nombre = "Juan Perez"
-        case_obj.created_at = datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc)
+        case_obj.created_at = datetime(2025, 1, 15, 10, 0, tzinfo=UTC)
 
         att = MagicMock(spec=Attachment)
-        att.path = "/tmp/file.jpg"
+        att.path = "comprobantes/case/file.jpg"
         att.mime_type = "image/jpeg"
         case_obj.attachments = [att]
 
         mock_session.execute.return_value.scalars.return_value.first.return_value = case_obj
 
-        monkeypatch.setattr(
-            settings.payment, "cartera_phone_allowlist_raw", "+573009999999"
-        )
+        monkeypatch.setattr(settings.payment, "cartera_phone_allowlist_raw", "+573009999999")
 
         import app.features.payment.nodes as nodes_mod
 
@@ -387,8 +381,9 @@ class TestNodeConfirming:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """node_confirming must set payment_approved=True in state (D-28)."""
-        import app.features.payment.nodes as nodes_mod
         from langchain_core.messages import AIMessage
+
+        import app.features.payment.nodes as nodes_mod
 
         monkeypatch.setattr(nodes_mod, "_session_factory_fn", mock_session_factory)
 
