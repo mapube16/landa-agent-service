@@ -209,10 +209,17 @@ async def receive(request: Request) -> dict[str, Any]:
         settings.chatwoot.webhook_secret.get_secret_value(),
         timestamp=header_ts,
     ):
+        import base64 as _b64
+
         log.warning(
             "chatwoot.webhook.bad_signature",
             header_present=bool(header_sig),
             timestamp_present=bool(header_ts),
+            # TEMP DEBUG (remove after live-smoke capture): raw material to
+            # solve the signing scheme offline.
+            debug_sig=header_sig,
+            debug_ts=header_ts,
+            debug_body_b64=_b64.b64encode(raw).decode("ascii"),
         )
         raise HTTPException(status_code=401, detail="invalid signature")
 
