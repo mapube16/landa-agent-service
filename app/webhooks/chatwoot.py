@@ -58,16 +58,27 @@ router = APIRouter(prefix="/webhooks", tags=["chatwoot"])
 log = structlog.get_logger("webhooks.chatwoot")
 
 
-def _verify_chatwoot_signature(raw_body: bytes, header_value: str, secret: str) -> bool:
+def _verify_chatwoot_signature(
+    raw_body: bytes, header_value: str, secret: str, timestamp: str = ""
+) -> bool:
     """Constant-time HMAC SHA-256 verify for ``X-Chatwoot-Signature`` (T-04-03-01).
 
-    Chatwoot sends ``sha256=<hex>`` per RESEARCH; bare hex is supported too
-    by stripping the prefix. NEVER ``==`` — always ``hmac.compare_digest``
-    (same timing-leak rule as webhooks/meta.py, D-16).
+    Chatwoot signs ``"{X-Chatwoot-Timestamp}.{raw_body}"`` per its webhook docs;
+    older builds sign the raw body alone (chatwoot/chatwoot#13809 documents the
+    inconsistency), so both message forms are accepted. ``sha256=<hex>`` and
+    bare hex header values are both supported. NEVER ``==`` — always
+    ``hmac.compare_digest`` (same timing-leak rule as webhooks/meta.py, D-16).
     """
     value = header_value.removeprefix("sha256=")
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, value)
+    key = secret.encode("utf-8")
+    messages = [raw_body]
+    if timestamp:
+        messages.append(f"{timestamp}.".encode() + raw_body)
+    for msg in messages:
+        expected = hmac.new(key, msg, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected, value):
+            return True
+    return False
 
 
 async def _relay_attachments(
@@ -191,10 +202,18 @@ async def receive(request: Request) -> dict[str, Any]:
     raw = await request.body()
 
     header_sig = request.headers.get("X-Chatwoot-Signature", "")
+    header_ts = request.headers.get("X-Chatwoot-Timestamp", "")
     if not header_sig or not _verify_chatwoot_signature(
-        raw, header_sig, settings.chatwoot.webhook_secret.get_secret_value()
+        raw,
+        header_sig,
+        settings.chatwoot.webhook_secret.get_secret_value(),
+        timestamp=header_ts,
     ):
-        log.warning("chatwoot.webhook.bad_signature", header_present=bool(header_sig))
+        log.warning(
+            "chatwoot.webhook.bad_signature",
+            header_present=bool(header_sig),
+            timestamp_present=bool(header_ts),
+        )
         raise HTTPException(status_code=401, detail="invalid signature")
 
     try:
