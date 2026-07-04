@@ -267,6 +267,50 @@ class PaymentSettings(BaseSettings):
         return frozenset(e for e in entries if e.startswith("+"))
 
 
+class AuditSettings(BaseSettings):
+    """Phase 5 audit log settings (SEC-01, SEC-02).
+
+    Controls the filesystem sink path (Railway volume mount from 04-01)
+    and whether the sink is enabled. Sink is used by the ARQ cron job in
+    05-03 to write daily ``.ndjson`` snapshots of the audit chain.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AUDIT_",
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # Default path is inside the Railway volume already mounted in 04-01.
+    # No new mount needed — shares /data/comprobantes volume.
+    sink_path: Path = Path("/data/comprobantes/audit")
+    sink_enabled: bool = True
+
+
+class RateLimitSettings(BaseSettings):
+    """Phase 5 Redis sliding-window rate limiter settings (SEC-06).
+
+    Three concentric limit levels (RESEARCH Pattern 5):
+    - phone_limit:  per-WhatsApp-number limit in ``window_s`` seconds
+    - poliza_limit: per-poliza limit in ``window_s`` seconds
+    - global_limit: global throughput cap in ``window_s`` seconds
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="RATE_LIMIT_",
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    enabled: bool = True
+    phone_limit: int = 20    # messages per window per WhatsApp number
+    poliza_limit: int = 10   # messages per window per poliza_id
+    global_limit: int = 500  # total messages per window across all numbers
+    window_s: int = 60       # sliding window size in seconds
+
+
 class LambdaProyectSettings(BaseSettings):
     """Integration settings for the lambda-proyect voice agent (D-23).
 
@@ -331,6 +375,9 @@ class Settings(BaseSettings):
     # Phase 4 (04-01): payment flow + lambda-proyect integration.
     payment: PaymentSettings = Field(default_factory=PaymentSettings)
     lambda_proyect: LambdaProyectSettings = Field(default_factory=LambdaProyectSettings)
+    # Phase 5 (05-01): audit log + rate limiting (SEC-01..SEC-06).
+    audit: AuditSettings = Field(default_factory=AuditSettings)
+    rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
 
 
 # Singleton — fail-fast at import time if a REQUIRED env var is missing.
@@ -339,6 +386,7 @@ settings = Settings()
 
 __all__ = [
     "AppSettings",
+    "AuditSettings",
     "ChatwootSettings",
     "LLMSettings",
     "LambdaProyectSettings",
@@ -346,6 +394,7 @@ __all__ = [
     "OpenRouterSettings",
     "PaymentSettings",
     "PostgresSettings",
+    "RateLimitSettings",
     "RedisSettings",
     "SentrySettings",
     "Settings",

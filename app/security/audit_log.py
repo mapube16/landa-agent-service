@@ -25,11 +25,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import orjson
 import structlog
+from sqlalchemy import TIMESTAMP as _TIMESTAMP
 from sqlalchemy import BigInteger, Text
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -60,8 +61,7 @@ class AuditLog(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(
         "created_at",
-        # TIMESTAMP WITH TIME ZONE
-        __import__("sqlalchemy").TIMESTAMP(timezone=True),
+        _TIMESTAMP(timezone=True),  # TIMESTAMP WITH TIME ZONE
         nullable=False,
         server_default=func.now(),
     )
@@ -164,7 +164,7 @@ async def emit(
             ).scalar() or ""
 
             # Python-side timestamp so it participates in the hash.
-            created_at = datetime.now(timezone.utc)
+            created_at = datetime.now(UTC)
 
             # Entry dict (metadata deliberately EXCLUDED per RESEARCH Pattern 2).
             entry: dict[str, Any] = {
@@ -287,7 +287,7 @@ def verify_chain_rows(rows: Sequence[Any]) -> tuple[bool, int | None]:
         # Rebuild entry dict — normalize created_at to ISO 8601 with tz info
         created_at: datetime = row.created_at
         if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
+            created_at = created_at.replace(tzinfo=UTC)
 
         entry: dict[str, Any] = {
             "id": row.id,

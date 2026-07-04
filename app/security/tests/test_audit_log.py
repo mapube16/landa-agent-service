@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import types
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,8 +19,8 @@ import pytest
 
 def test_audit_log_table_registered_on_base() -> None:
     """audit_log table must be registered on Base.metadata after import."""
-    from app.security import audit_log  # noqa: F401
     from app.config.db import Base
+    from app.security import audit_log  # noqa: F401
 
     assert "audit_log" in Base.metadata.tables
 
@@ -245,7 +245,7 @@ def _make_chain_rows(
 
     rows: list[types.SimpleNamespace] = []
     prev_hash = ""
-    base_dt = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    base_dt = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 
     for i in range(1, n + 1):
         created_at = base_dt.replace(second=i)
