@@ -68,7 +68,12 @@ def _inbound_text_payload(
     ).encode("utf-8")
 
 
-def _inbound_image_payload(message_id: str = "wamid.img1", from_: str = "15555550100") -> bytes:
+def _inbound_image_payload(
+    message_id: str = "wamid.img1",
+    from_: str = "15555550100",
+    media_id: str = "MEDIA-123",
+    mime_type: str = "image/jpeg",
+) -> bytes:
     return json.dumps(
         {
             "object": "whatsapp_business_account",
@@ -86,6 +91,51 @@ def _inbound_image_payload(message_id: str = "wamid.img1", from_: str = "1555555
                                         "id": message_id,
                                         "timestamp": "1",
                                         "type": "image",
+                                        "image": {
+                                            "id": media_id,
+                                            "mime_type": mime_type,
+                                            "sha256": "abc123",
+                                        },
+                                    }
+                                ],
+                            },
+                            "field": "messages",
+                        }
+                    ],
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
+def _inbound_document_payload(
+    message_id: str = "wamid.doc1",
+    from_: str = "15555550100",
+    media_id: str = "DOC-456",
+    mime_type: str = "application/pdf",
+) -> bytes:
+    return json.dumps(
+        {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "x",
+                    "changes": [
+                        {
+                            "value": {
+                                "messaging_product": "whatsapp",
+                                "metadata": {},
+                                "messages": [
+                                    {
+                                        "from": from_,
+                                        "id": message_id,
+                                        "timestamp": "1",
+                                        "type": "document",
+                                        "document": {
+                                            "id": media_id,
+                                            "mime_type": mime_type,
+                                            "filename": "comprobante.pdf",
+                                        },
                                     }
                                 ],
                             },
@@ -338,11 +388,18 @@ async def test_post_non_allowlisted_sender_skips_dispatch(
     redis_mock.set.assert_awaited_once()
 
 
-async def test_post_image_message_triggers_send_media_ack(
-    client: AsyncClient, stub_app_state: tuple[MagicMock, MagicMock]
+async def test_post_image_message_enqueues_process_attachment(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
 ) -> None:
-    meta_mock, _ = stub_app_state
-    body = _inbound_image_payload()
+    """F4 (Plan 04-04): inbound comprobante image → enqueue process_attachment.
+
+    This exercises the REAL webhook image branch end-to-end (not the payment
+    node directly), which is the gap the 04-04 executor missed: the image must
+    reach the ARQ payment intake job, not the F3 media echo.
+    """
+    meta_mock, _redis, _qa, arq_mock = stub_app_state_f3
+    body = _inbound_image_payload(media_id="MEDIA-123", mime_type="image/jpeg")
     sig = _sign(body)
     r = await client.post(
         "/webhooks/meta",
@@ -350,8 +407,40 @@ async def test_post_image_message_triggers_send_media_ack(
         headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
     )
     assert r.status_code == 200
-    meta_mock.send_media_ack.assert_awaited_once_with(to="15555550100", media_type="image")
+    arq_mock.enqueue_job.assert_awaited_once_with(
+        "process_attachment",
+        phone="15555550100",
+        media_id="MEDIA-123",
+        mime_type="image/jpeg",
+        wamid="wamid.img1",
+    )
+    # No F3 echo, no direct LLM call, no premature outbound text.
+    meta_mock.send_media_ack.assert_not_called()
     meta_mock.send_text.assert_not_called()
+
+
+async def test_post_document_message_enqueues_process_attachment(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+) -> None:
+    """F4: inbound comprobante PDF (document) → enqueue process_attachment."""
+    meta_mock, _redis, _qa, arq_mock = stub_app_state_f3
+    body = _inbound_document_payload(media_id="DOC-456", mime_type="application/pdf")
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    arq_mock.enqueue_job.assert_awaited_once_with(
+        "process_attachment",
+        phone="15555550100",
+        media_id="DOC-456",
+        mime_type="application/pdf",
+        wamid="wamid.doc1",
+    )
+    meta_mock.send_media_ack.assert_not_called()
 
 
 async def test_post_status_update_acknowledged_without_dispatch(

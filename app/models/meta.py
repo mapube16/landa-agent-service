@@ -65,8 +65,25 @@ class InteractiveReply(BaseModel):
         return None
 
 
+class MediaObject(BaseModel):
+    """``message.image`` / ``message.document`` payload (F4, Plan 04-04).
+
+    Only the fields the payment intake needs: ``id`` (Meta media handle to
+    download from the CDN) and ``mime_type`` (magic-byte gate cross-check).
+    ``caption`` / ``filename`` are kept for context but optional.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    mime_type: str | None = None
+    sha256: str | None = None
+    caption: str | None = None
+    filename: str | None = None
+
+
 class InboundMessage(BaseModel):
-    """One entry of ``value.messages[]`` — only the fields F2 reads."""
+    """One entry of ``value.messages[]`` — only the fields F2/F4 read."""
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -88,11 +105,14 @@ class InboundMessage(BaseModel):
         "button",
         "unknown",
     ]
-    # Only poblado cuando type=="text"; otros media payloads (image/audio/etc.)
-    # NO se modelan acá — el handler sólo necesita ``type`` para enrutar.
+    # Only poblado cuando type=="text".
     text: MessageText | None = None
     # Poblado cuando type=="interactive" — respuesta de botón o lista.
     interactive: InteractiveReply | None = None
+    # F4 (Plan 04-04): comprobante media — poblado cuando type=="image"/"document".
+    # El webhook los enruta al flujo de pago (process_attachment).
+    image: MediaObject | None = None
+    document: MediaObject | None = None
 
 
 class ChangeValue(BaseModel):

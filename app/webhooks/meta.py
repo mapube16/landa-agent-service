@@ -172,9 +172,7 @@ async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> No
                     message_type="outgoing",
                 )
             except Exception as exc:  # noqa: BLE001
-                log.error(
-                    "output_firewall.chatwoot_note_failed", error_type=type(exc).__name__
-                )
+                log.error("output_firewall.chatwoot_note_failed", error_type=type(exc).__name__)
         # Do NOT enqueue mirror_outbound for the blocked text.
         return
 
@@ -476,6 +474,51 @@ async def _handle_text_message(
     )
 
 
+async def _handle_comprobante(*, msg: InboundMessage, request: Request, phone_hash: str) -> None:
+    """F4 (Plan 04-04): enqueue the ARQ payment intake job for a comprobante.
+
+    Called for inbound ``image``/``document`` from a client-allowlisted number.
+    We always enqueue; ``node_receive_comprobante`` decides via case lookup
+    whether the conversation is actually in a receive state. Runs async so the
+    HTTP webhook returns before Meta's ~5s timeout.
+    """
+    media = msg.image if msg.type == "image" else msg.document
+    arq = getattr(request.app.state, "arq", None)
+    if media is None or arq is None:
+        log.error(
+            "webhook.comprobante.enqueue_skipped",
+            message_id=msg.id,
+            phone_hash=phone_hash,
+            reason="missing_media_or_arq",
+            result="error",
+        )
+        return
+    try:
+        await arq.enqueue_job(
+            "process_attachment",
+            phone=msg.from_,
+            media_id=media.id,
+            mime_type=media.mime_type or "application/octet-stream",
+            wamid=msg.id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "webhook.comprobante.enqueue_failed",
+            message_id=msg.id,
+            phone_hash=phone_hash,
+            error_type=type(exc).__name__,
+            result="error",
+        )
+        return
+    log.info(
+        "webhook.comprobante.enqueued",
+        message_id=msg.id,
+        phone_hash=phone_hash,
+        message_type=msg.type,
+        result="comprobante_enqueued",
+    )
+
+
 async def _dispatch_message(
     *, msg: InboundMessage, meta: Any, redis: Any, request: Request
 ) -> None:
@@ -559,7 +602,12 @@ async def _dispatch_message(
         )
         return
 
-    if msg.type in {"image", "audio", "sticker", "video", "document", "voice", "location"}:
+    # F4 (Plan 04-04): inbound comprobante (image or document/PDF) → payment flow.
+    if msg.type in {"image", "document"}:
+        await _handle_comprobante(msg=msg, request=request, phone_hash=phone_hash)
+        return
+
+    if msg.type in {"audio", "sticker", "video", "voice", "location"}:
         try:
             wamid = await meta.send_media_ack(to=msg.from_, media_type=msg.type)
         except Exception as exc:  # noqa: BLE001
