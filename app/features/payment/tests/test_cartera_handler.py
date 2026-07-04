@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -40,7 +40,7 @@ class _FakeResult:
     def __init__(self, value: Any) -> None:
         self._value = value
 
-    def scalars(self) -> "_FakeResult":
+    def scalars(self) -> _FakeResult:
         return self
 
     def first(self) -> Any:
@@ -200,6 +200,79 @@ async def test_resume_returns_false_when_case_not_found() -> None:
 
     assert result is False
     qa_graph.ainvoke.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resume_dispatches_confirmation_to_client() -> None:
+    """After resume, the send_to_client AIMessage from graph state reaches the client.
+
+    Regression: node_confirming only puts the confirmation into graph state;
+    without dispatch on the resume path the client never receives it (found
+    in live smoke — cartera tapped Aprobar, client got nothing).
+    """
+    from langchain_core.messages import AIMessage
+
+    from app.features.payment.cartera import resume_payment_interrupt
+
+    case = _make_case(status="awaiting_cartera")
+    qa_graph = AsyncMock()
+    qa_graph.ainvoke.return_value = {
+        "messages": [
+            AIMessage(
+                content="Tu pago fue confirmado para la poliza POL-123. Gracias.",
+                additional_kwargs={"payment_approved": True, "send_to_client": True},
+            )
+        ],
+        "payment_status": "approved",
+    }
+    meta_client = AsyncMock()
+
+    result = await resume_payment_interrupt(
+        action="aprobar",
+        case_id=CASE_ID,
+        extra=None,
+        qa_graph=qa_graph,
+        db_session_factory=_session_factory(case),
+        meta_client=meta_client,
+    )
+
+    assert result is True
+    meta_client.send_text.assert_awaited_once()
+    kwargs = meta_client.send_text.await_args.kwargs
+    assert kwargs["to"] == case.phone
+    assert "confirmado" in kwargs["body"]
+
+
+@pytest.mark.asyncio
+async def test_resume_dispatch_blocked_by_firewall_without_approval() -> None:
+    """D-28: a confirmation-looking message without payment_approved never sends."""
+    from langchain_core.messages import AIMessage
+
+    from app.features.payment.cartera import resume_payment_interrupt
+
+    case = _make_case(status="awaiting_cartera")
+    qa_graph = AsyncMock()
+    qa_graph.ainvoke.return_value = {
+        "messages": [
+            AIMessage(
+                content="Tu pago fue confirmado para la poliza POL-123. Gracias.",
+                additional_kwargs={"send_to_client": True},
+            )
+        ],
+    }
+    meta_client = AsyncMock()
+
+    result = await resume_payment_interrupt(
+        action="aprobar",
+        case_id=CASE_ID,
+        extra=None,
+        qa_graph=qa_graph,
+        db_session_factory=_session_factory(case),
+        meta_client=meta_client,
+    )
+
+    assert result is True
+    meta_client.send_text.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

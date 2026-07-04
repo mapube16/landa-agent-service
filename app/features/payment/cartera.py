@@ -76,6 +76,7 @@ async def resume_payment_interrupt(
     extra: str | None,
     qa_graph: object,
     db_session_factory: object,
+    meta_client: object | None = None,
 ) -> bool:
     """Resume the LangGraph payment flow from its ``interrupt()`` suspension.
 
@@ -126,10 +127,71 @@ async def resume_payment_interrupt(
     config = {"configurable": {"thread_id": case.phone}}
     resume_value = {"action": action, "extra": extra}
 
-    await qa_graph.ainvoke(Command(resume=resume_value), config=config)  # type: ignore[union-attr]
+    final_state = await qa_graph.ainvoke(  # type: ignore[union-attr]
+        Command(resume=resume_value), config=config
+    )
 
     log.info("cartera.resume.ok", case_id=case_id, action=action)
+
+    # Dispatch the client-facing message the resumed nodes emitted.
+    # node_confirming / node_payment_escalate only PUT an AIMessage into graph
+    # state (send_to_client=True) — nothing on the resume path sends it. The
+    # webhook's _run_and_dispatch never runs here, so without this the client
+    # never receives the confirmation/escalation text.
+    if meta_client is not None and isinstance(final_state, dict):
+        await _dispatch_client_message(
+            final_state=final_state,
+            phone=case.phone,
+            case_id=case_id,
+            meta_client=meta_client,
+        )
     return True
+
+
+async def _dispatch_client_message(
+    *,
+    final_state: dict,
+    phone: str,
+    case_id: str,
+    meta_client: object,
+) -> None:
+    """Send the last ``send_to_client`` AIMessage from graph state to the client.
+
+    D-28: the text passes through ``check_outbound`` first. ``payment_approved``
+    is taken from the message's own ``additional_kwargs`` — only
+    ``node_confirming`` sets it, so a confirmation emitted anywhere else is
+    blocked by the firewall exactly like on the webhook dispatch path.
+    """
+    from langchain_core.messages import AIMessage
+
+    from app.security.output_firewall import check_outbound
+
+    outbound: AIMessage | None = None
+    for m in reversed(final_state.get("messages", [])):
+        if isinstance(m, AIMessage) and m.additional_kwargs.get("send_to_client"):
+            outbound = m
+            break
+    if outbound is None:
+        log.info("cartera.dispatch.no_outbound", case_id=case_id)
+        return
+
+    text = str(outbound.content) if outbound.content else ""
+    payment_approved = bool(outbound.additional_kwargs.get("payment_approved", False))
+    allowed, fw_reason = check_outbound(text, payment_approved=payment_approved)
+    if not allowed:
+        log.error("cartera.dispatch.firewall_blocked", case_id=case_id, reason=fw_reason)
+        return
+
+    try:
+        await meta_client.send_text(to=phone, body=text)  # type: ignore[union-attr]
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "cartera.dispatch.send_failed",
+            case_id=case_id,
+            error_type=type(exc).__name__,
+        )
+        return
+    log.info("cartera.dispatch.sent", case_id=case_id, payment_approved=payment_approved)
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +241,7 @@ async def handle_cartera_message(
                 extra=None,
                 qa_graph=qa_graph,
                 db_session_factory=db_session_factory,
+                meta_client=meta_client,
             )
             return
         # Fall through — unknown button_id triggers button re-send below.
