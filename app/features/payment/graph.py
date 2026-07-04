@@ -88,11 +88,13 @@ def build_payment_subgraph(checkpointer: object | None = None) -> StateGraph:  #
     g: StateGraph = StateGraph(QAState)  # type: ignore[type-arg]
 
     # Add all 5 payment nodes.
-    g.add_node(NODE_RECEIVE_COMPROBANTE, node_receive_comprobante)
-    g.add_node(NODE_FORWARD_TO_CARTERA, node_forward_to_cartera)
-    g.add_node(NODE_AWAITING_CARTERA, node_awaiting_cartera)
-    g.add_node(NODE_CONFIRMING, node_confirming)
-    g.add_node(NODE_PAYMENT_ESCALATE, node_payment_escalate)
+    # LangGraph add_node TypeVar rejects the dict[str,Any] node signature under
+    # mypy strict; runtime is correct (nodes receive the state dict).
+    g.add_node(NODE_RECEIVE_COMPROBANTE, node_receive_comprobante)  # type: ignore[type-var]
+    g.add_node(NODE_FORWARD_TO_CARTERA, node_forward_to_cartera)  # type: ignore[type-var]
+    g.add_node(NODE_AWAITING_CARTERA, node_awaiting_cartera)  # type: ignore[type-var]
+    g.add_node(NODE_CONFIRMING, node_confirming)  # type: ignore[type-var]
+    g.add_node(NODE_PAYMENT_ESCALATE, node_payment_escalate)  # type: ignore[type-var]
 
     # Entry point: always start with receive.
     g.set_entry_point(NODE_RECEIVE_COMPROBANTE)

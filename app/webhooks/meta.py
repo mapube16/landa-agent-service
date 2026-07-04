@@ -436,7 +436,8 @@ async def _peek_poliza_id(app_state: Any, thread_id: str) -> str | None:
         if existing is None:
             return None
         channel_values = existing.get("channel_values", {})
-        return channel_values.get("poliza_id")
+        val = channel_values.get("poliza_id")
+        return str(val) if val is not None else None
     except Exception as exc:  # noqa: BLE001
         log.warning("webhook.peek_poliza_id.failed", error_type=type(exc).__name__)
         return None

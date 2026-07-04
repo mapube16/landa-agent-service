@@ -423,7 +423,7 @@ async def node_answer(state: QAState) -> dict[str, Any]:
         }
 
     poliza_id: str | None = state.get("poliza_id")
-    conv_id: str | None = state.get("thread_id") or state.get("conversation_id")
+    conv_id: str | None = str(state.get("thread_id") or state.get("conversation_id") or "") or None
     judge_retries: int = state.get("judge_retries", 0)
     last_rationale: str | None = state.get("last_rejection_rationale")
 
@@ -598,7 +598,7 @@ async def node_escalate(state: QAState) -> dict[str, Any]:
     audit_log.emit_task(
         action="escalation",
         actor="bot",
-        conversation_id=state.get("thread_id") or state.get("conversation_id"),
+        conversation_id=str(state.get("thread_id") or state.get("conversation_id") or "") or None,
         poliza_id=state.get("poliza_id"),
         payload={"reason": str(reason)},
     )

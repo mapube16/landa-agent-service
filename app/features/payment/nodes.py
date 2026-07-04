@@ -56,7 +56,7 @@ def _get_chatwoot() -> Any:
     return get_chatwoot_client()
 
 
-def _session_factory_fn() -> Any:  # type: ignore[return]
+def _session_factory_fn() -> Any:
     """Return an async context manager for a DB session.
 
     This is the monkeypatch target; real calls go through session_scope.
@@ -67,8 +67,8 @@ def _session_factory_fn() -> Any:  # type: ignore[return]
     """
     from contextlib import asynccontextmanager
 
-    @asynccontextmanager  # type: ignore[misc]
-    async def _real() -> Any:  # type: ignore[misc]
+    @asynccontextmanager
+    async def _real() -> Any:
         from app.config.db import session_scope
         from app.main import app as _app  # pragma: no cover
 
@@ -597,7 +597,7 @@ async def node_payment_escalate(state: dict[str, Any]) -> dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _make_session_ctx() -> Any:  # type: ignore[return]
+def _make_session_ctx() -> Any:
     """Return an async context manager for a DB session.
 
     Delegates to the patchable ``_session_factory_fn``.

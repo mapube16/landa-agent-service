@@ -93,11 +93,13 @@ def build_qa_graph() -> StateGraph:  # type: ignore[type-arg]
     builder.add_node("closed", node_close)
 
     # ── Payment nodes (Phase 4, Plan 04-04) ─────────────────────────────────
-    builder.add_node(NODE_RECEIVE_COMPROBANTE, node_receive_comprobante)
-    builder.add_node(NODE_FORWARD_TO_CARTERA, node_forward_to_cartera)
-    builder.add_node(NODE_AWAITING_CARTERA, node_awaiting_cartera)
-    builder.add_node(NODE_CONFIRMING, node_confirming)
-    builder.add_node(NODE_PAYMENT_ESCALATE, node_payment_escalate)
+    # LangGraph add_node TypeVar rejects the dict[str,Any] node signature under
+    # mypy strict; runtime is correct (nodes receive the state dict).
+    builder.add_node(NODE_RECEIVE_COMPROBANTE, node_receive_comprobante)  # type: ignore[type-var]
+    builder.add_node(NODE_FORWARD_TO_CARTERA, node_forward_to_cartera)  # type: ignore[type-var]
+    builder.add_node(NODE_AWAITING_CARTERA, node_awaiting_cartera)  # type: ignore[type-var]
+    builder.add_node(NODE_CONFIRMING, node_confirming)  # type: ignore[type-var]
+    builder.add_node(NODE_PAYMENT_ESCALATE, node_payment_escalate)  # type: ignore[type-var]
 
     # ── Conditional entry ────────────────────────────────────────────────────
     builder.set_conditional_entry_point(

@@ -17,7 +17,7 @@ Security invariants (threat model 04-05):
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import structlog
 
@@ -74,9 +74,9 @@ async def resume_payment_interrupt(
     action: Literal["aprobar", "rechazar", "info"],
     case_id: str,
     extra: str | None,
-    qa_graph: object,
-    db_session_factory: object,
-    meta_client: object | None = None,
+    qa_graph: Any,
+    db_session_factory: Any,
+    meta_client: Any | None = None,
 ) -> bool:
     """Resume the LangGraph payment flow from its ``interrupt()`` suspension.
 
@@ -127,9 +127,7 @@ async def resume_payment_interrupt(
     config = {"configurable": {"thread_id": case.phone}}
     resume_value = {"action": action, "extra": extra}
 
-    final_state = await qa_graph.ainvoke(  # type: ignore[union-attr]
-        Command(resume=resume_value), config=config
-    )
+    final_state = await qa_graph.ainvoke(Command(resume=resume_value), config=config)
 
     log.info("cartera.resume.ok", case_id=case_id, action=action)
 
@@ -150,10 +148,10 @@ async def resume_payment_interrupt(
 
 async def _dispatch_client_message(
     *,
-    final_state: dict,
+    final_state: dict[str, Any],
     phone: str,
     case_id: str,
-    meta_client: object,
+    meta_client: Any,
 ) -> None:
     """Send the last ``send_to_client`` AIMessage from graph state to the client.
 
@@ -183,7 +181,7 @@ async def _dispatch_client_message(
         return
 
     try:
-        await meta_client.send_text(to=phone, body=text)  # type: ignore[union-attr]
+        await meta_client.send_text(to=phone, body=text)
     except Exception as exc:  # noqa: BLE001
         log.error(
             "cartera.dispatch.send_failed",
@@ -201,10 +199,10 @@ async def _dispatch_client_message(
 
 async def handle_cartera_message(
     *,
-    msg: object,
-    qa_graph: object,
-    meta_client: object,
-    db_session_factory: object,
+    msg: Any,
+    qa_graph: Any,
+    meta_client: Any,
+    db_session_factory: Any,
 ) -> None:
     """Dispatch an inbound message from a cartera phone number.
 
@@ -230,8 +228,8 @@ async def handle_cartera_message(
     # ------------------------------------------------------------------
     # Path 1: Interactive button tap
     # ------------------------------------------------------------------
-    if msg.type == "interactive" and msg.interactive is not None:  # type: ignore[union-attr]
-        raw_id: str | None = msg.interactive.selected_id()  # type: ignore[union-attr]
+    if msg.type == "interactive" and msg.interactive is not None:
+        raw_id: str | None = msg.interactive.selected_id()
         parsed = parse_button_id(raw_id or "")
         if parsed is not None:
             action, case_id = parsed
@@ -263,7 +261,7 @@ async def handle_cartera_message(
         case = result.scalars().first()
 
     if case is None:
-        log.info("cartera.message.no_open_case", from_hash=str(msg.from_)[:6])  # type: ignore[union-attr]
+        log.info("cartera.message.no_open_case", from_hash=str(msg.from_)[:6])
         return
 
     buttons: list[tuple[str, str]] = [
@@ -271,8 +269,8 @@ async def handle_cartera_message(
         (f"rechazar|{case.case_id}", "Rechazar"),
         (f"info|{case.case_id}", "Mas info"),
     ]
-    await meta_client.send_buttons(  # type: ignore[union-attr]
-        to=msg.from_,  # type: ignore[union-attr]
+    await meta_client.send_buttons(
+        to=msg.from_,
         body=_FALLBACK_BODY,
         buttons=buttons,
     )

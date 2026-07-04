@@ -29,6 +29,7 @@ from typing import Any
 
 from arq import cron
 from arq.connections import RedisSettings
+from langchain_core.runnables import RunnableConfig
 
 from app.config.settings import settings
 from app.features.payment.scheduler import check_pending_cases, cleanup_attachments_90d
@@ -160,7 +161,7 @@ async def process_attachment(
         try:
             await checkpointer.setup()
             graph = build_qa_graph().compile(checkpointer=checkpointer)
-            config: dict[str, Any] = {"configurable": {"thread_id": phone}}
+            config: RunnableConfig = {"configurable": {"thread_id": phone}}
             await graph.aupdate_state(
                 config,
                 values={
@@ -181,7 +182,7 @@ async def process_attachment(
         return
 
     # Fast path: use pre-compiled graph from worker lifespan.
-    config = {"configurable": {"thread_id": phone}}
+    config = RunnableConfig(configurable={"thread_id": phone})
     await graph.aupdate_state(
         config,
         values={
