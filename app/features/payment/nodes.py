@@ -30,6 +30,7 @@ from langgraph.types import interrupt
 
 from app.features.payment.business_hours import is_business_time, next_business_window_after
 from app.features.payment.storage import store_attachment
+from app.security import audit_log
 
 log = structlog.get_logger("features.payment.nodes")
 
@@ -511,6 +512,16 @@ async def node_confirming(state: dict[str, Any]) -> dict[str, Any]:
         additional_kwargs={"payment_approved": True, "send_to_client": True},
     )
 
+    # Audit: payment_approved — fire-and-forget, never raises (05-01 guarantee)
+    phone: str = state.get("wa_phone") or state.get("thread_id", "")
+    audit_log.emit_task(
+        action="payment_approved",
+        actor="cartera",
+        conversation_id=phone or None,
+        poliza_id=state.get("poliza_id"),
+        payload={"case_id": str(case_id), "status": "approved"},
+    )
+
     log.info("payment.confirming.ok", case_id=case_id)
     return {
         "messages": [msg],
@@ -564,6 +575,15 @@ async def node_payment_escalate(state: dict[str, Any]) -> dict[str, Any]:
 
     content = "La revision esta tardando. Te conecto con un agente."
     msg = AIMessage(content=content, additional_kwargs={"send_to_client": True})
+
+    # Audit: payment_rejected — fire-and-forget, never raises (05-01 guarantee)
+    audit_log.emit_task(
+        action="payment_rejected",
+        actor="cartera",
+        conversation_id=phone or None,
+        poliza_id=state.get("poliza_id"),
+        payload={"case_id": str(case_id), "status": "escalated"},
+    )
 
     log.info("payment.escalate.ok", case_id=case_id, conv_id=conv_id)
     return {
