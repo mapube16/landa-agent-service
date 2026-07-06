@@ -326,7 +326,10 @@ class LambdaProyectSettings(BaseSettings):
     )
 
     base_url: str = "http://localhost:8001"
-    internal_token: SecretStr  # REQUIRED — LAMBDA_PROYECT_INTERNAL_TOKEN
+    internal_token: SecretStr  # REQUIRED — LAMBDA_PROYECT_INTERNAL_TOKEN (VOICE calls US)
+    # Optional (Fase 6): auth WA→VOICE for B1/B2 calls. None until ops configures it —
+    # the client no-ops with a warning log rather than breaking the payment flow.
+    wa_to_voice_token: SecretStr | None = None
 
 
 class SentrySettings(BaseSettings):

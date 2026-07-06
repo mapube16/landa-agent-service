@@ -51,6 +51,44 @@ _LIST_PAGE_SIZE = 9  # 9 polizas + 1 "Ver más" row = 10 total (Meta limit)
 _MORE_BUTTON_ID = "__more"
 _QA_BUTTON_IDS = {"saldo", "estado", "coberturas", "agente"}
 
+
+def _session_factory_fn() -> Any:
+    """Return an async context manager for a DB session (L4 flags lookup).
+
+    Monkeypatch target for tests — same pattern as
+    ``app/features/payment/nodes.py``.
+    """
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _real() -> Any:
+        from app.config.db import session_scope
+        from app.main import app as _app  # pragma: no cover
+
+        async with session_scope(_app.state.session_factory) as s:  # pragma: no cover
+            yield s  # pragma: no cover
+
+    return _real()
+
+
+async def _fetch_l4_flags(wa_phone: str | None) -> dict[str, Any]:
+    """Return summarised L4 debtor flags for ``wa_phone``, or ``{}``.
+
+    Fail-open (same pattern as audit_log/chatwoot cache): a lookup failure
+    must never break the conversation turn.
+    """
+    if not wa_phone:
+        return {}
+    try:
+        from app.memory.debtor_flags import get_debtor_flags
+
+        async with _session_factory_fn() as session:
+            return await get_debtor_flags(session, wa_phone)
+    except Exception:  # noqa: BLE001
+        log.warning("qa.l4_flags.lookup_failed", exc_info=True)
+        return {}
+
+
 __all__ = [
     "node_answer",
     "node_choose_policy",
@@ -427,8 +465,10 @@ async def node_answer(state: QAState) -> dict[str, Any]:
     judge_retries: int = state.get("judge_retries", 0)
     last_rationale: str | None = state.get("last_rejection_rationale")
 
+    l4_flags = await _fetch_l4_flags(state.get("wa_phone"))
+
     # Build system prompt
-    sp = system_prompt(kb_content=load_kb(), poliza_id=poliza_id)
+    sp = system_prompt(kb_content=load_kb(), poliza_id=poliza_id, l4_flags=l4_flags)
     if judge_retries > 0 and last_rationale:
         sp += (
             f"\n\nLa respuesta anterior fue rechazada por el judge: {last_rationale}."

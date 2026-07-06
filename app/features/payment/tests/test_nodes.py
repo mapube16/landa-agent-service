@@ -402,6 +402,65 @@ class TestNodeConfirming:
         assert ai_msgs, "node_confirming must emit an AIMessage"
         assert ai_msgs[0].additional_kwargs.get("payment_approved") is True
 
+    @pytest.mark.asyncio
+    async def test_confirming_notifies_voice_when_debtor_id_set(
+        self,
+        mock_session: AsyncMock,
+        mock_session_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fase 6 Contrato B2: voice-linked case → update_debtor called on approve."""
+        import app.features.payment.nodes as nodes_mod
+        from app.memory.case_store import Case
+
+        case_id = str(uuid.uuid4())
+        case_obj = MagicMock(spec=Case)
+        case_obj.debtor_id = "dpg-deudor-123"
+        mock_session.execute.return_value.scalars.return_value.first.return_value = case_obj
+
+        monkeypatch.setattr(nodes_mod, "_session_factory_fn", mock_session_factory)
+        mock_lambda_client = AsyncMock()
+        monkeypatch.setattr(
+            "app.integrations.lambda_proyect.get_lambda_proyect_client",
+            lambda: mock_lambda_client,
+        )
+
+        state = _make_state(case_id=case_id, poliza_id="POL456", payment_status="approved")
+        await nodes_mod.node_confirming(state)
+
+        mock_lambda_client.update_debtor.assert_awaited_once()
+        args, kwargs = mock_lambda_client.update_debtor.await_args
+        assert args[0] == "dpg-deudor-123"
+        assert kwargs["estado"] == "pagado"
+
+    @pytest.mark.asyncio
+    async def test_confirming_skips_voice_notify_when_no_debtor_id(
+        self,
+        mock_session: AsyncMock,
+        mock_session_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """WhatsApp-only case (no voice handoff) must never call lambda_proyect."""
+        import app.features.payment.nodes as nodes_mod
+        from app.memory.case_store import Case
+
+        case_id = str(uuid.uuid4())
+        case_obj = MagicMock(spec=Case)
+        case_obj.debtor_id = None
+        mock_session.execute.return_value.scalars.return_value.first.return_value = case_obj
+
+        monkeypatch.setattr(nodes_mod, "_session_factory_fn", mock_session_factory)
+        mock_lambda_client = AsyncMock()
+        monkeypatch.setattr(
+            "app.integrations.lambda_proyect.get_lambda_proyect_client",
+            lambda: mock_lambda_client,
+        )
+
+        state = _make_state(case_id=case_id, poliza_id="POL456", payment_status="approved")
+        await nodes_mod.node_confirming(state)
+
+        mock_lambda_client.update_debtor.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # node_payment_escalate
@@ -430,3 +489,69 @@ class TestNodePaymentEscalate:
 
         mock_chatwoot.get_or_create_conversation.assert_awaited_once()
         assert result["payment_status"] == "escalated"
+
+    @pytest.mark.asyncio
+    async def test_escalate_notifies_voice_when_debtor_id_set(
+        self,
+        mock_chatwoot: AsyncMock,
+        mock_meta: AsyncMock,
+        mock_session: AsyncMock,
+        mock_session_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fase 6 Contrato B1: voice-linked case → escalate_case called."""
+        import app.features.payment.nodes as nodes_mod
+        from app.memory.case_store import Case
+
+        case_id = str(uuid.uuid4())
+        case_obj = MagicMock(spec=Case)
+        case_obj.debtor_id = "dpg-deudor-123"
+        mock_session.execute.return_value.scalars.return_value.first.return_value = case_obj
+
+        monkeypatch.setattr(nodes_mod, "_get_meta", lambda: mock_meta)
+        monkeypatch.setattr(nodes_mod, "_get_chatwoot", lambda: mock_chatwoot)
+        monkeypatch.setattr(nodes_mod, "_session_factory_fn", mock_session_factory)
+        mock_lambda_client = AsyncMock()
+        monkeypatch.setattr(
+            "app.integrations.lambda_proyect.get_lambda_proyect_client",
+            lambda: mock_lambda_client,
+        )
+
+        state = _make_state(case_id=case_id, payment_status="awaiting_cartera")
+        await nodes_mod.node_payment_escalate(state)
+
+        mock_lambda_client.escalate_case.assert_awaited_once()
+        args, _kwargs = mock_lambda_client.escalate_case.await_args
+        assert args[0] == case_id
+
+    @pytest.mark.asyncio
+    async def test_escalate_skips_voice_notify_when_no_debtor_id(
+        self,
+        mock_chatwoot: AsyncMock,
+        mock_meta: AsyncMock,
+        mock_session: AsyncMock,
+        mock_session_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """WhatsApp-only case (no voice handoff) must never call lambda_proyect."""
+        import app.features.payment.nodes as nodes_mod
+        from app.memory.case_store import Case
+
+        case_id = str(uuid.uuid4())
+        case_obj = MagicMock(spec=Case)
+        case_obj.debtor_id = None
+        mock_session.execute.return_value.scalars.return_value.first.return_value = case_obj
+
+        monkeypatch.setattr(nodes_mod, "_get_meta", lambda: mock_meta)
+        monkeypatch.setattr(nodes_mod, "_get_chatwoot", lambda: mock_chatwoot)
+        monkeypatch.setattr(nodes_mod, "_session_factory_fn", mock_session_factory)
+        mock_lambda_client = AsyncMock()
+        monkeypatch.setattr(
+            "app.integrations.lambda_proyect.get_lambda_proyect_client",
+            lambda: mock_lambda_client,
+        )
+
+        state = _make_state(case_id=case_id, payment_status="awaiting_cartera")
+        await nodes_mod.node_payment_escalate(state)
+
+        mock_lambda_client.escalate_case.assert_not_called()

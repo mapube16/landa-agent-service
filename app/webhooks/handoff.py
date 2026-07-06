@@ -44,6 +44,22 @@ class NoAnswerHandoff(BaseModel):
     case_id: uuid.UUID
 
 
+class CaseHandoff(BaseModel):
+    """Body contract for Contrato A (Fase 6) — VOICE cedes a live case to WA.
+
+    See ``.planning/contracts/lambda-handoff-contract.md``.
+    """
+
+    case_id: uuid.UUID
+    debtor_id: str = Field(min_length=1, max_length=80)
+    poliza_number: str = Field(min_length=1, max_length=40)
+    phone: str = Field(pattern=r"^\+\d{8,15}$")
+    call_id: str | None = None
+    user_id: str | None = None
+    initial_context: str | None = None
+    message: str | None = None
+
+
 def _verify_bearer(authorization: str | None = Header(None)) -> None:
     """Constant-time bearer check against LAMBDA_PROYECT_INTERNAL_TOKEN (D-23)."""
     if authorization is None or not authorization.startswith("Bearer "):
@@ -97,3 +113,66 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
         phone_hash=_hash_phone(body.phone),
     )
     return {"case_id": case_id, "sent": True}
+
+
+@router.post("/handoff", dependencies=[Depends(_verify_bearer)])
+async def case_handoff(body: CaseHandoff, request: Request) -> dict[str, str | bool]:
+    """Contrato A (Fase 6): VOICE cedes a live case to WhatsApp.
+
+    Idempotent by ``case_id`` (same pattern as ``/handoff/no_answer``). Links
+    the case to the voice world via ``debtor_id``/``call_ids`` so the payment
+    nodes know to notify VOICE back (B1/B2) on approve/escalate.
+
+    ponytail: freeform send only — no 24h-window/template fallback yet (no
+    real closed-window handoff has appeared). Add when one does.
+    """
+    from app.security import audit_log
+
+    meta = request.app.state.meta
+    session_factory = request.app.state.session_factory
+    case_id = str(body.case_id)
+
+    async with session_factory() as session:
+        existing = (
+            await session.execute(select(Case).where(Case.case_id == case_id))
+        ).scalar_one_or_none()
+        if existing is not None:
+            log.info("handoff.case.idempotent_skip", case_id=case_id)
+            return {"case_id": case_id, "sent": False}
+        session.add(
+            Case(
+                case_id=case_id,
+                phone=body.phone,
+                poliza_id=body.poliza_number,
+                status="awaiting_receipt",
+                debtor_id=body.debtor_id,
+                call_ids=[body.call_id] if body.call_id else [],
+            )
+        )
+        await session.commit()
+
+    sent = False
+    if body.message:
+        await meta.send_text(body.phone, body.message)
+        sent = True
+
+    audit_log.emit_task(
+        action="handoff_received",
+        actor="voice",
+        conversation_id=body.phone,
+        poliza_id=body.poliza_number,
+        payload={
+            "case_id": case_id,
+            "debtor_id": body.debtor_id,
+            "call_id": body.call_id,
+            "user_id": body.user_id,
+        },
+    )
+    log.info(
+        "handoff.case.ok",
+        case_id=case_id,
+        debtor_id=body.debtor_id,
+        phone_hash=_hash_phone(body.phone),
+        sent=sent,
+    )
+    return {"case_id": case_id, "sent": sent}

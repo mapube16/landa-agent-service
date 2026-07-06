@@ -87,6 +87,11 @@ class Case(Base):
         sa.TIMESTAMP(timezone=True), nullable=True
     )
     cartera_message_wamid: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Fase 6 (voice<->WA handoff, migration 0004). NULL for WhatsApp-only cases.
+    debtor_id: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    call_ids: Mapped[list[str]] = mapped_column(
+        sa.JSON, nullable=False, server_default=sa.text("'[]'"), default=list
+    )
     created_at: Mapped[sa.DateTime] = mapped_column(
         sa.TIMESTAMP(timezone=True),
         nullable=False,

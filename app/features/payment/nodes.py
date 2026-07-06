@@ -499,12 +499,24 @@ async def node_confirming(state: dict[str, Any]) -> dict[str, Any]:
     poliza_id: str | None = state.get("poliza_id") or "N/A"
 
     # Update case status to approved.
+    debtor_id: str | None = None
     async with _make_session_ctx() as session:
         result = await session.execute(sa.select(Case).where(Case.case_id == case_id))
         case = result.scalars().first()
         if case:
             case.status = "approved"
+            debtor_id = case.debtor_id
             await session.flush()
+
+    # Fase 6 Contrato B2: notify VOICE when this case originated from a call.
+    if debtor_id:
+        from app.integrations.lambda_proyect import get_lambda_proyect_client
+
+        await get_lambda_proyect_client().update_debtor(
+            debtor_id,
+            estado="pagado",
+            ultima_interaccion_wa=datetime.now(UTC).isoformat(),
+        )
 
     content = f"Tu pago fue confirmado para la poliza POL-{poliza_id}. Gracias."
     msg = AIMessage(
@@ -565,13 +577,23 @@ async def node_payment_escalate(state: dict[str, Any]) -> dict[str, Any]:
 
     # Update case status.
     now = datetime.now(UTC)
+    debtor_id: str | None = None
     async with _make_session_ctx() as session:
         result = await session.execute(sa.select(Case).where(Case.case_id == case_id))
         case = result.scalars().first()
         if case:
             case.status = "escalated"
             case.escalated_at = now
+            debtor_id = case.debtor_id
             await session.flush()
+
+    # Fase 6 Contrato B1: notify VOICE when this case originated from a call.
+    if debtor_id:
+        from app.integrations.lambda_proyect import get_lambda_proyect_client
+
+        await get_lambda_proyect_client().escalate_case(
+            case_id, reason="payment_escalated", channel="whatsapp"
+        )
 
     content = "La revision esta tardando. Te conecto con un agente."
     msg = AIMessage(content=content, additional_kwargs={"send_to_client": True})
