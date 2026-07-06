@@ -1,6 +1,7 @@
 # HANDOFF — landa-agent-service (para el agente que continúa)
 
-Generado: 2026-07-04. Reemplaza el handoff anterior (cambio de compu, Fase 4).
+Generado: 2026-07-04. Actualizado: 2026-07-05 (Fase 6 lado WA construido).
+Reemplaza el handoff anterior (cambio de compu, Fase 4).
 
 ## 0. Qué es este repo y qué NO
 
@@ -23,7 +24,8 @@ sin construir**.
 ## 1. Estado actual (2026-07-04)
 
 - **Fases 1-5 COMPLETAS, verificadas, desplegadas.** CI de GitHub Actions
-  **VERDE**. **419 tests** (`-m "not integration"`), ruff+black+mypy --strict limpios.
+  **VERDE**. **438 tests** (`-m "not integration"`), ruff+black+mypy --strict
+  limpios (subió de 419 tras Fase 6 lado WA, commit `61edf7e`).
 - **Fase 4** (pago + Chatwoot bidi): smoke en vivo hecho con números de prueba
   Meta. 6 bugs de prod encontrados+arreglados (ver §3).
 - **Fase 5** (seguridad + audit log): audit log inmutable (trigger Postgres) +
@@ -40,22 +42,42 @@ Fuente de verdad detallada (LEER estos 5 antes de tocar nada):
 
 ## 2. Ruta pendiente (qué sigue, en orden)
 
-### A. Fase 6 — integración con el voice agent (lambda-proyect)
-Estado: **contrato REST redactado**, código sin construir. El operador maneja
-AMBOS repos (tiene acceso a lambda-proyect).
-- Contrato: `.planning/contracts/lambda-handoff-contract.md` (Contrato A: VOICE→WA
-  `POST /case/handoff`; Contrato B: WA→VOICE escalate + debtor/update; reparto de
-  9 entregables; recomendación: **NO** montar submodule `landa-shared`, duplicar
-  ~3 modelos frozen v1).
-- Lado WA (este repo, entregables 1-5): `POST /case/handoff`, migración 0004
-  (cases cross-canal: call_ids/conversation_ids/escalations/events + debtor_id),
-  `memory/case_store.py` cross-canal, `memory/debtor_flags.py` (inyección al
-  system prompt), cliente REST a VOICE (`integrations/lambda_proyect.py` es el stub).
-- Lado VOICE (lambda-proyect, entregables 6-8): endpoints B1/B2 + reemplazar el
-  stub muerto `cobranza/sub_agents/whatsapp_notifier.py`.
-- Para construir el lado VOICE hay que **clonar lambda-proyect** en esta máquina
-  primero y explorarlo (rellena los campos de Debtor/Policy que el contrato dejó
-  abiertos). NO pushear a su main sin permiso.
+### A. Fase 6 — integración con el voice agent (lambda-proyect) — AMBOS LADOS CONSTRUIDOS
+Contrato: `.planning/contracts/lambda-handoff-contract.md`.
+
+- **Lado WA (este repo, commit `61edf7e`, 2026-07-05): entregables 1-5 DONE.**
+  `POST /case/handoff` (Contrato A, en `app/webhooks/handoff.py`), migración
+  `0004_cases_cross_canal` (solo `debtor_id` + `call_ids` — el resto del draft
+  original, `conversation_ids`/`escalations`/`events`, se DIFIRIÓ por YAGNI,
+  nada los consume hoy), `app/memory/debtor_flags.py` (L4, inyectado en
+  `node_answer`), `app/integrations/lambda_proyect.py` (cliente REST Contrato B:
+  `escalate_case`/`update_debtor`, fail-open — nunca bloquea el flujo al
+  cliente). Wireado en `node_confirming` (B2 al aprobar) y
+  `node_payment_escalate` (B1 al escalar), ambos gateados por
+  `case.debtor_id is not None` (casos WhatsApp-only no llaman a VOICE). 438
+  tests (19 nuevos), ruff+black+mypy limpios.
+- **Lado VOICE (lambda-proyect, repo `hive-pixel-office` en esta máquina,
+  rama `eval/dpg-cobranza-microservice`, commit `add742d`, 2026-07-05):
+  entregables 6-9 DONE.** `cobranza/wa_bridge_router.py` (B1 escalate + B2
+  update, fail-closed 503 si `WA_TO_VOICE_TOKEN` no está configurado),
+  `cobranza/wa_bridge.py` (llama a WA con Contrato A), fix real del stub
+  muerto `whatsapp_notifier.py`, `cobranza/shared_models.py` (Debtor/Policy/
+  ConversationContext copiados, sin submodule `landa-shared` — decisión v1).
+  Self-check 8/8 contra Mongo real.
+  ⚠️ **OJO con este repo**: el `HEAD` local salta de rama solo entre
+  sesiones (se observó pasar de `eval/dpg-cobranza-microservice` a `master`
+  sin que nadie de esta sesión lo pidiera) — probablemente otra sesión tuya
+  trabajando ahí en paralelo. Antes de tocarlo, correr
+  `git log --oneline -1` y `git branch --show-current` para confirmar dónde
+  quedó, y si hay otra sesión activa, coordinar antes de hacer `checkout`.
+
+**Pendiente para activar el puente end-to-end (no es código, es ops):**
+configurar en Railway, AMBOS repos: `LAMBDA_PROYECT_BASE_URL`/
+`LAMBDA_PROYECT_INTERNAL_TOKEN` (VOICE→WA, ya existía) y
+`LAMBDA_PROYECT_WA_TO_VOICE_TOKEN`/`WA_TO_VOICE_TOKEN` (WA→VOICE, nuevo —
+mismo secreto, nombre de env var distinto en cada repo). Sin esto, el lado WA
+sigue funcionando normal (fail-open, solo no notifica a VOICE) y el lado
+VOICE devuelve 503 fail-closed a cualquier llamada de WA.
 
 ### B. SoftSeguros — lookup de pagos rápido (RESUELTO, sin cablear)
 El `get_pagos` actual (`app/integrations/softseguros.py:258`) da **504** (lento).
