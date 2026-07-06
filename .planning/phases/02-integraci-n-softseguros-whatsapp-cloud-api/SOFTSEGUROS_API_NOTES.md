@@ -42,8 +42,9 @@ Subsequent calls authenticate with header: `Authorization: Token <token>`.
 | `/api/cliente/{id}/` | GET | 200 | Full client detail. **122 root fields** — see schema below. |
 | `/api/estadopoliza/?limit=N` | GET | 200 | Lookup table of 8 estado codes. **See enum below.** |
 | `/api/estadopoliza/{id}/` | GET | 404 | The lookup-style detail endpoint does NOT exist — use the list. The `poliza.estado_poliza` int FK joins to this table; the embedded `estado_poliza_nombre` + `estado_poliza_codigo` already suffices for the bot. |
-| `/api/pagopoliza/?poliza_id={id}&limit=N` | GET | 504 | Gateway timeout. The pagos endpoint is unbearably slow. Use the embedded `poliza.total_pagos_poliza` + `poliza.pago_poliza_consecutivo` for F2/F3, OR find a faster query param. **Open question for F3.** |
+| `/api/pagopoliza/?poliza_id={id}&limit=N` | GET | 504 | Gateway timeout. **SUPERSEDED — use `list_pagospolizas_filtro_paginados` below.** |
 | `/api/pagopoliza/?numero_poliza=...&limit=N` | GET | timeout | Same. |
+| `/api/pagopoliza/list_pagospolizas_filtro_paginados/` | GET | 200 | **FAST. Solves the 504 (open Q #3, 2026-07-04).** Cartera-por-cobrar view. Scope to one policy: `?sede=1047&texto_busqueda={numero_poliza}&search_in=poliza_numero_poliza`. Returns DRF-paginated `{count, next, previous, results[]}` — one row per cuota. Auth: the app's OWN token (`/api-token-auth/`) works — no browser token needed. See field map + caveats below. |
 | `/api/pago/` | GET | 404 | Not a real route. |
 
 ---
@@ -350,7 +351,14 @@ Grouped by what's likely relevant for the bot's Q&A. **Bold = the bot will read 
 
 1. **¿El user `cartera.dpg` está OK para producción del bot, o pedimos uno dedicado (`bot.landa` con scope read-only)?** Defense in depth — capa adicional sobre nuestro code-level READ-ONLY enforcement.
 2. **¿Hay rate limits en SoftSeguros?** No documentado. Probable que haya tier-based limits. Si el bot escala, hay que medir y posiblemente coordinar.
-3. **¿`/api/pagopoliza/` tiene un endpoint optimizado?** El timeout es 504 incluso con `limit=2`. Tal vez DPG tiene un endpoint custom (`/api/dpg/pagos-resumen/` o similar). Preguntar.
+3. ~~¿`/api/pagopoliza/` tiene un endpoint optimizado?~~ **RESUELTO 2026-07-04.**
+   `GET /api/pagopoliza/list_pagospolizas_filtro_paginados/?sede=1047&texto_busqueda={numero_poliza}&search_in=poliza_numero_poliza&order_by=fecha_pago&sort_by=asc&page=1` → HTTP 200, rápido. Auth = token propio del app (`/api-token-auth/`). Devuelve `{count,next,previous,results[]}`, una fila por cuota.
+   **Mapa de campos (semántica del INFORME TÉCNICO §3):**
+   - `fecha_pago` = vencimiento original de la cuota → base para días de mora.
+   - `fecha_realizara_pago` = compromiso de pago (agenda de seguimiento). *(nombre plausible; CONFIRMAR con DPG que no es otro campo).*
+   - `fecha_realizo_pago` + `saldo_pendiente` = ¿pagó?/cuánto debe. `saldo_pendiente="0.00"` = cuota saldada.
+   - `poliza_numero_poliza`, `poliza_cliente_nombres/apellidos`, `poliza_cliente_celular`, `poliza_aseguradora_link_pago`, `edad_cartera`.
+   **CAVEATS al cablear:** (a) response trae ~150 campos incl. comisiones/PII → **whitelist estricta Capa 4** antes del LLM; (b) es endpoint `list_*` → SOLO uso código scopeado por póliza, NUNCA tool de búsqueda al LLM; (c) `sede=1047` asumido = DPG (confirmar si multi-sede); (d) reemplaza el `get_pagos` con 504 en `app/integrations/softseguros.py:258`. Cablear cuando F6/debtor_flags lo consuma (YAGNI: no hay consumidor hoy).
 4. **¿Cuáles son los campos que DPG considera PII estrictamente confidencial vs revelable al cliente?** Para la whitelist de Capa 4. Mi propuesta inicial está en "Phase 3" arriba — validar con DPG/legal.
 5. **¿Tokens expiran?** `days_remaining: 58` en la auth response — es el license, no el token TTL. Asumimos refresh on 401 hasta que tengamos respuesta.
 
