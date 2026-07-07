@@ -180,7 +180,7 @@ class MetaCloudClient:
         if not r.is_success:
             log.error(
                 "meta.send.failed",
-                event=log_event,
+                for_event=log_event,
                 status=r.status_code,
                 body=r.text[:500],
                 phone_id=self._phone_id,

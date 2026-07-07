@@ -299,6 +299,31 @@ async def test_send_template_no_answer_followup(monkeypatch: pytest.MonkeyPatch)
     assert button_components[1]["parameters"] == [{"type": "payload", "payload": "mas_tarde"}]
 
 
+async def test_send_template_error_response_raises_without_crashing_logger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: _post_message's error-path log.error() must not itself raise.
+
+    A structlog call passing ``event=`` as an explicit kwarg collides with the
+    positional message (which structlog binds to ``event``) — this crashed
+    with a bare TypeError instead of surfacing Meta's real rejection reason
+    (production incident 2026-07-07: a 4xx from Meta was masked entirely).
+    """
+    client = _make_client()
+    error_response = _json_response(400, {"error": {"message": "Invalid parameter"}})
+    mock_post = AsyncMock(return_value=error_response)
+    monkeypatch.setattr(client._http, "post", mock_post)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.send_template(
+            to="16505551234",
+            template_name="voice_no_answer_followup",
+            lang="es",
+            body_params=["Juan"],
+            quick_reply_payloads=["si_ayudenme", "mas_tarde"],
+        )
+
+
 async def test_send_template_without_quick_replies(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _make_client()
     mock_post = AsyncMock(return_value=_wamid_response())
