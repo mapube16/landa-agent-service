@@ -86,6 +86,9 @@ async def client(meta: MagicMock, session: _FakeSession) -> AsyncIterator[AsyncC
     app = FastAPI()
     app.include_router(router)
     app.state.meta = meta
+    app.state.redis = MagicMock()  # bare mock: check_rate_limit's own eval() call
+    # raises on it (not an AsyncMock) -> caught by _check_handoff_rate_limit's
+    # fail-open except, same real-world behavior as a genuinely down Redis.
 
     @asynccontextmanager
     async def factory() -> AsyncIterator[_FakeSession]:

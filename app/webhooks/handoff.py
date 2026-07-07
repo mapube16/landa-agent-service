@@ -30,6 +30,7 @@ from sqlalchemy import select
 from app.config.settings import settings
 from app.integrations.meta_cloud import _hash_phone
 from app.memory.case_store import Case
+from app.security.rate_limiter import check_rate_limit
 
 router = APIRouter(prefix="/case", tags=["handoff"])
 log = structlog.get_logger("webhooks.handoff")
@@ -70,6 +71,21 @@ def _verify_bearer(authorization: str | None = Header(None)) -> None:
         raise HTTPException(status_code=401, detail="invalid bearer")
 
 
+async def _check_handoff_rate_limit(request: Request, phone: str) -> None:
+    """Reuses the sliding-window limiter already proven in webhooks/meta.py —
+    without it, a misbehaving or compromised voice-side caller could flood a
+    real WhatsApp number with unlimited outbound sends (SEC-audit finding)."""
+    redis = request.app.state.redis
+    try:
+        rl = await check_rate_limit(redis, phone=phone)
+    except Exception as exc:  # noqa: BLE001 — same belt-and-suspenders as meta.py
+        log.error("handoff.rate_limit_check_failed", error_type=type(exc).__name__)
+        return
+    if not rl.allowed:
+        log.warning("handoff.rate_limited", scope=rl.scope)
+        raise HTTPException(status_code=429, detail="rate limited")
+
+
 @router.post("/handoff/no_answer", dependencies=[Depends(_verify_bearer)])
 async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str, str | bool]:
     """Open a Case for the unanswered call and send the follow-up template.
@@ -78,6 +94,8 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
     sequential; switch to pg insert().on_conflict_do_nothing if concurrent
     retransmits ever appear.
     """
+    await _check_handoff_rate_limit(request, body.phone)
+
     meta = request.app.state.meta
     session_factory = request.app.state.session_factory
     case_id = str(body.case_id)
@@ -127,6 +145,8 @@ async def case_handoff(body: CaseHandoff, request: Request) -> dict[str, str | b
     real closed-window handoff has appeared). Add when one does.
     """
     from app.security import audit_log
+
+    await _check_handoff_rate_limit(request, body.phone)
 
     meta = request.app.state.meta
     session_factory = request.app.state.session_factory

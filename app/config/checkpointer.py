@@ -55,7 +55,13 @@ def build_checkpointer_cm() -> AbstractAsyncContextManager[AsyncPostgresSaver]:
     leaving the asyncpg pool (15 conns) the dominant contributor to the
     ~30-conn budget vs Postgres ``max_connections=100``.
     """
-    return AsyncPostgresSaver.from_conn_string(settings.postgres.url.get_secret_value())
+    # statement_timeout: sin esto, una query colgada en este pool (que respalda
+    # CADA turno del grafo de LangGraph) no tiene límite. libpq/psycopg leen
+    # `options=-c statement_timeout=<ms>` como GUC de conexión.
+    conn_string = settings.postgres.url.get_secret_value()
+    sep = "&" if "?" in conn_string else "?"
+    conn_string = f"{conn_string}{sep}options=-c%20statement_timeout%3D20000"
+    return AsyncPostgresSaver.from_conn_string(conn_string)
 
 
 __all__ = [

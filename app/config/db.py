@@ -79,6 +79,9 @@ def create_db_engine() -> AsyncEngine:
         pool_recycle=1800,  # recycle conns every 30 min to dodge Railway idle kills
         echo=False,  # T-01-12 mitigation: never log connection strings or SQL
         future=True,
+        # command_timeout: asyncpg has no default here — an unbounded query on an
+        # already-open connection can pin a pool slot forever under a DB stall.
+        connect_args={"command_timeout": 20},
     )
 
 

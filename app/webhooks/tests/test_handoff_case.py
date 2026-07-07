@@ -81,6 +81,9 @@ async def client(meta: MagicMock, session: _FakeSession) -> AsyncIterator[AsyncC
     app = FastAPI()
     app.include_router(router)
     app.state.meta = meta
+    app.state.redis = MagicMock()  # bare mock: check_rate_limit's own eval() call
+    # raises on it (not an AsyncMock) -> caught by _check_handoff_rate_limit's
+    # fail-open except, same real-world behavior as a genuinely down Redis.
 
     @asynccontextmanager
     async def factory() -> AsyncIterator[_FakeSession]:
@@ -107,6 +110,20 @@ async def test_validation_error_returns_422(client: AsyncClient) -> None:
 async def test_invalid_phone_format_returns_422(client: AsyncClient, meta: MagicMock) -> None:
     r = await client.post("/case/handoff", json=_body(phone="abc"), headers=AUTH)
     assert r.status_code == 422
+    meta.send_text.assert_not_called()
+
+
+async def test_rate_limited_returns_429(
+    client: AsyncClient, meta: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.webhooks import handoff
+
+    async def _blocked(*args: Any, **kwargs: Any) -> Any:
+        return type("_RL", (), {"allowed": False, "scope": "phone"})()
+
+    monkeypatch.setattr(handoff, "check_rate_limit", _blocked)
+    r = await client.post("/case/handoff", json=_body(), headers=AUTH)
+    assert r.status_code == 429
     meta.send_text.assert_not_called()
 
 

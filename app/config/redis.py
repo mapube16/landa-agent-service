@@ -47,10 +47,17 @@ def create_redis_pool() -> tuple[RedisClient, RedisPool]:
     on Railway plans — and sized big enough that ARQ + cache + rate-limit don't
     starve each other under v1 traffic.
     """
+    # socket_timeout/socket_connect_timeout: redis-py defaults both to None
+    # (no bound). This pool backs the rate limiter itself (app/security/
+    # rate_limiter.py) plus SoftSeguros/Chatwoot caches — an unbounded hung
+    # socket here doesn't raise, so it never reaches those call sites' own
+    # fail-open exception handlers; it just pins the request.
     pool: RedisPool = ConnectionPool.from_url(
         settings.redis.url.get_secret_value(),
         max_connections=20,
         decode_responses=False,
+        socket_connect_timeout=5,
+        socket_timeout=10,
     )
     client: RedisClient = Redis(connection_pool=pool)
     return client, pool
