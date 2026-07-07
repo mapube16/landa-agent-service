@@ -58,19 +58,37 @@ Cliente envía comprobante de pago por WhatsApp → bot lo reenvía al número d
 
 ### Template Meta "no contestamos llamada"
 - **D-19:** Template = **`voice_no_answer_followup`**, categoría **UTILITY**, idioma **`es`**.
-- **D-20:** Copy (revisado 2026-07-06, "Opción A"):
+- **D-20:** Copy FINAL (sometido a revisión en Meta 2026-07-06) — texto oficial del
+  informe técnico (`INFORME TÉCNICO BOT COBRANZA CON CORRECCIONES.docx`, §10
+  "MENSAJES DE WHATSAPP", Mensaje 1 — Presentación) tal cual, sin mención de
+  riesgo/póliza-número (esa idea se descartó — el informe solo usa el nombre):
   ```
-  [Header] No logramos comunicarnos contigo 📞
+  [Header] Hola, {{nombre}}
 
   [Body]
-  Hola {{1}}, te llamamos por tu póliza POL-{{2}} pero no pudimos contactarte.
+  Hola 👋 Soy ARIA,
 
-  ¿Quieres que sigamos por acá?
+  Asistente virtual de cobranza de DPG Seguros. Intentamos contactarte para
+  brindarte información sobre el pago de tu póliza.
+
+  Por este WhatsApp puedes consultar tu póliza, solicitar tu link o cupón de
+  pago, y enviarnos el comprobante una vez realices el pago.
+
+  Si necesitas ayuda, solo responde a este mensaje. ¡Excelente día! 😊
   ```
-  Variables: `{{1}}` = nombre del cliente, `{{2}}` = numero_poliza (mismo orden que antes).
-  El header es texto plano (nuevo componente vs. el draft original — WhatsApp UTILITY
-  soporta header text opcional).
-- **D-21:** Botones quick-reply: **`Sí, ayúdenme`** y **`Más tarde`**. Tap "Sí" → entra al flujo Q&A existente como si el cliente hubiera escrito; tap "Más tarde" → bot responde "OK, escribinos cuando puedas" y termina la conversación (sin escalar). El texto del botón es libre — el payload real (`si_ayudenme`/`mas_tarde`) lo inyecta `meta.send_template()` al enviar, no depende del label aprobado en Meta (ver `app/integrations/meta_cloud.py`).
+  Variable: `{{nombre}}` = nombre del cliente (formato de variable nombrada, no
+  posicional — Meta lo exige así ahora). Sin variable de póliza/riesgo.
+- **D-21:** Botones quick-reply **"Personalizado"** (no "Llamada a la acción"):
+  **`Sí, ayúdenme`** y **`Más tarde`**. Se agregaron ENCIMA del texto oficial del
+  informe (el body no los menciona explícitamente, pero un botón no requiere
+  mención textual). Tap "Sí" → entra al flujo Q&A existente como si el cliente
+  hubiera escrito; tap "Más tarde" → bot responde "OK, escribinos cuando puedas"
+  y termina la conversación (sin escalar). El texto del botón es libre — el
+  payload real (`si_ayudenme`/`mas_tarde`) lo inyecta `meta.send_template()` al
+  enviar, no depende del label aprobado en Meta (ver `app/integrations/meta_cloud.py`).
+  **Pendiente de código (no ahora):** `send_template()` manda params por
+  posición; con variable nombrada (`{{nombre}}`) hay que mandar
+  `parameter_name` en el body component cuando se cablee el envío real.
 - **D-22:** Submisión del template a Meta para approval = **prerequisito out-of-band** (Maxi/operador lo crea en Meta Business Suite). El plan documenta el nombre y variables; cuando esté aprobado, se setea env var `META_TEMPLATE_NO_ANSWER_NAME=voice_no_answer_followup` para que el código lo use.
 - **D-23:** Endpoint `POST /case/handoff/no_answer` autenticado con `LAMBDA_PROYECT_INTERNAL_TOKEN` (env var compartido entre los dos repos). Payload mínimo: `{phone, cliente_nombre, numero_poliza, case_id}`. El handler crea el case en Postgres, envía el template, queda escuchando webhook con la respuesta del cliente.
 
