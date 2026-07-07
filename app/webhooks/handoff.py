@@ -122,8 +122,9 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
         body.phone,
         settings.payment.template_no_answer_name,
         "es",
-        [body.cliente_nombre, body.numero_poliza],
-        ["si_ayudenme", "mas_tarde"],
+        body_params=[],
+        quick_reply_payloads=["si_ayudenme", "mas_tarde"],
+        header_params=[body.cliente_nombre],
     )
     log.info(
         "handoff.no_answer.template_sent",

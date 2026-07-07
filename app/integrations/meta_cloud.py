@@ -323,19 +323,35 @@ class MetaCloudClient:
         lang: str,
         body_params: list[str],
         quick_reply_payloads: list[str] | None = None,
+        header_params: list[str] | None = None,
     ) -> str:
-        """Send a template message with body params + quick replies (D-19/20/21).
+        """Send a template message with header/body params + quick replies.
 
-        Payload shape per RESEARCH "Template message shape": one ``body``
-        component with text parameters plus one indexed ``quick_reply``
-        button component per payload string. Quick-reply taps come back as
-        ``interactive.button_reply.id`` carrying the payload value.
+        Payload shape per RESEARCH "Template message shape": one indexed
+        ``quick_reply`` button component per payload string, plus optional
+        ``header``/``body`` text components. A component is only included
+        when it has parameters — Meta rejects a component present with the
+        wrong param count (``#132000``), and a template whose body has no
+        variables (D-20, ``voice_no_answer_followup``) must omit the body
+        component entirely rather than send it with an empty list. Quick-reply
+        taps come back as ``interactive.button_reply.id`` carrying the payload.
         """
-        body_component: dict[str, Any] = {
-            "type": "body",
-            "parameters": [{"type": "text", "text": p} for p in body_params],
-        }
-        button_components: list[dict[str, Any]] = [
+        components: list[dict[str, Any]] = []
+        if header_params:
+            components.append(
+                {
+                    "type": "header",
+                    "parameters": [{"type": "text", "text": p} for p in header_params],
+                }
+            )
+        if body_params:
+            components.append(
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": p} for p in body_params],
+                }
+            )
+        components.extend(
             {
                 "type": "button",
                 "sub_type": "quick_reply",
@@ -343,7 +359,7 @@ class MetaCloudClient:
                 "parameters": [{"type": "payload", "payload": qr}],
             }
             for idx, qr in enumerate(quick_reply_payloads or [])
-        ]
+        )
         payload: dict[str, Any] = {
             "messaging_product": "whatsapp",
             "to": to,
@@ -351,7 +367,7 @@ class MetaCloudClient:
             "template": {
                 "name": template_name,
                 "language": {"code": lang},
-                "components": [body_component, *button_components],
+                "components": components,
             },
         }
         return await self._post_message(

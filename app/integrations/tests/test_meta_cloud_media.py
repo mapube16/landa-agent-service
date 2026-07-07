@@ -299,6 +299,40 @@ async def test_send_template_no_answer_followup(monkeypatch: pytest.MonkeyPatch)
     assert button_components[1]["parameters"] == [{"type": "payload", "payload": "mas_tarde"}]
 
 
+async def test_send_template_header_only_omits_body_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: voice_no_answer_followup has 0 body vars, 1 header var.
+
+    Meta rejects a component present with the wrong param count (#132000,
+    production incident 2026-07-07) — sending body_params=[] must omit the
+    body component entirely rather than send it with an empty parameters list.
+    """
+    client = _make_client()
+    mock_post = AsyncMock(return_value=_wamid_response())
+    monkeypatch.setattr(client._http, "post", mock_post)
+
+    await client.send_template(
+        to="16505551234",
+        template_name="voice_no_answer_followup",
+        lang="es",
+        body_params=[],
+        quick_reply_payloads=["si_ayudenme", "mas_tarde"],
+        header_params=["Juan"],
+    )
+
+    _, kwargs = mock_post.call_args
+    components = kwargs["json"]["template"]["components"]
+    types = [c["type"] for c in components]
+    assert "body" not in types
+    header_components = [c for c in components if c["type"] == "header"]
+    assert header_components == [
+        {"type": "header", "parameters": [{"type": "text", "text": "Juan"}]}
+    ]
+    button_components = [c for c in components if c["type"] == "button"]
+    assert len(button_components) == 2
+
+
 async def test_send_template_error_response_raises_without_crashing_logger(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
