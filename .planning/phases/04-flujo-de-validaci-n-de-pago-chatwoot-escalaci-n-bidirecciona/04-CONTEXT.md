@@ -58,14 +58,19 @@ Cliente envía comprobante de pago por WhatsApp → bot lo reenvía al número d
 
 ### Template Meta "no contestamos llamada"
 - **D-19:** Template = **`voice_no_answer_followup`**, categoría **UTILITY**, idioma **`es`**.
-- **D-20:** Cuerpo:
+- **D-20:** Copy (revisado 2026-07-06, "Opción A"):
   ```
-  Hola {{1}} 👋, soy el asistente de DPG Seguros.
-  Intentamos llamarte sobre tu póliza POL-{{2}} pero no logramos contactarte.
-  Si querés, podemos ayudarte por aquí. ¿Te gustaría que te ayude?
+  [Header] No logramos comunicarnos contigo 📞
+
+  [Body]
+  Hola {{1}}, te llamamos por tu póliza POL-{{2}} pero no pudimos contactarte.
+
+  ¿Quieres que sigamos por acá?
   ```
-  Variables: `{{1}}` = nombre del cliente, `{{2}}` = numero_poliza.
-- **D-21:** Botones quick-reply: **`Sí, ayúdenme`** y **`Más tarde`**. Tap "Sí" → entra al flujo Q&A existente como si el cliente hubiera escrito; tap "Más tarde" → bot responde "OK, escribinos cuando puedas" y termina la conversación (sin escalar).
+  Variables: `{{1}}` = nombre del cliente, `{{2}}` = numero_poliza (mismo orden que antes).
+  El header es texto plano (nuevo componente vs. el draft original — WhatsApp UTILITY
+  soporta header text opcional).
+- **D-21:** Botones quick-reply: **`Sí, ayúdenme`** y **`Más tarde`**. Tap "Sí" → entra al flujo Q&A existente como si el cliente hubiera escrito; tap "Más tarde" → bot responde "OK, escribinos cuando puedas" y termina la conversación (sin escalar). El texto del botón es libre — el payload real (`si_ayudenme`/`mas_tarde`) lo inyecta `meta.send_template()` al enviar, no depende del label aprobado en Meta (ver `app/integrations/meta_cloud.py`).
 - **D-22:** Submisión del template a Meta para approval = **prerequisito out-of-band** (Maxi/operador lo crea en Meta Business Suite). El plan documenta el nombre y variables; cuando esté aprobado, se setea env var `META_TEMPLATE_NO_ANSWER_NAME=voice_no_answer_followup` para que el código lo use.
 - **D-23:** Endpoint `POST /case/handoff/no_answer` autenticado con `LAMBDA_PROYECT_INTERNAL_TOKEN` (env var compartido entre los dos repos). Payload mínimo: `{phone, cliente_nombre, numero_poliza, case_id}`. El handler crea el case en Postgres, envía el template, queda escuchando webhook con la respuesta del cliente.
 
