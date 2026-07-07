@@ -25,7 +25,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, TypedDict
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Phase 2 passthrough alias — kept for F2 callers; do NOT remove.
@@ -152,7 +152,29 @@ class PolizaSummary(BaseModel):
     estado: str
 
 
+class CarteraStatus(BaseModel):
+    """Allowlist for ``get_cartera_status`` (Capa 4) — L4 flags enrichment.
+
+    Sourced from ``list_pagospolizas_filtro_paginados`` (~150 raw fields incl.
+    commissions/PII); this DTO is the only shape that leaves
+    ``SoftSegurosClient`` for this endpoint. ``riesgo`` maps from the raw
+    ``poliza_codio_objeto_asegurado`` field (sic — typo in the upstream API);
+    for ``ramo_nombre="AUTOMÓVILES"`` it holds the vehicle plate.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    fecha_pago: str | None = None
+    fecha_realizara_pago: str | None = None
+    fecha_realizo_pago: str | None = None
+    saldo_pendiente: str | None = None
+    edad_cartera: int | None = None
+    ramo_nombre: str | None = None
+    riesgo: str | None = Field(default=None, validation_alias="poliza_codio_objeto_asegurado")
+
+
 __all__ = [
+    "CarteraStatus",
     "ClienteRaw",
     "Cobertura",
     "CoberturasResponse",

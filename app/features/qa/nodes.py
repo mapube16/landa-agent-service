@@ -71,7 +71,7 @@ def _session_factory_fn() -> Any:
     return _real()
 
 
-async def _fetch_l4_flags(wa_phone: str | None) -> dict[str, Any]:
+async def _fetch_l4_flags(wa_phone: str | None, poliza_id: str | None = None) -> dict[str, Any]:
     """Return summarised L4 debtor flags for ``wa_phone``, or ``{}``.
 
     Fail-open (same pattern as audit_log/chatwoot cache): a lookup failure
@@ -83,7 +83,7 @@ async def _fetch_l4_flags(wa_phone: str | None) -> dict[str, Any]:
         from app.memory.debtor_flags import get_debtor_flags
 
         async with _session_factory_fn() as session:
-            return await get_debtor_flags(session, wa_phone)
+            return await get_debtor_flags(session, wa_phone, poliza_id)
     except Exception:  # noqa: BLE001
         log.warning("qa.l4_flags.lookup_failed", exc_info=True)
         return {}
@@ -465,7 +465,7 @@ async def node_answer(state: QAState) -> dict[str, Any]:
     judge_retries: int = state.get("judge_retries", 0)
     last_rationale: str | None = state.get("last_rejection_rationale")
 
-    l4_flags = await _fetch_l4_flags(state.get("wa_phone"))
+    l4_flags = await _fetch_l4_flags(state.get("wa_phone"), poliza_id)
 
     # Build system prompt
     sp = system_prompt(kb_content=load_kb(), poliza_id=poliza_id, l4_flags=l4_flags)

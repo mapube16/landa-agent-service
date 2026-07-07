@@ -284,7 +284,6 @@ async def test_401_triggers_refresh_and_retry_once(
         # get_estado now aliases get_poliza — /api/estadopoliza/{id}/ returns 404,
         # estado lives embedded in the poliza object (SOFTSEGUROS_API_NOTES.md).
         ("get_estado", "123", "/api/poliza/123/", {}),
-        ("get_pagos", "123", "/api/pagopoliza/", {"poliza_id": "123"}),
     ],
 )
 async def test_public_get_methods_route_to_correct_paths(
@@ -394,3 +393,78 @@ async def test_get_polizas_by_cliente_returns_results_list(
     call_args = stub_http.get.call_args
     assert call_args.args[0] == "/api/poliza/"
     assert call_args.kwargs.get("params") == {"cliente": 7, "limit": 20}
+
+
+# ---------------------------------------------------------------------------
+# get_cartera_status (Fase 6 — replaces the old 504 get_pagos)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_cartera_status_returns_first_row_whitelisted(
+    mocked_client: Any, stub_http: MagicMock, stub_redis: MagicMock
+) -> None:
+    """Cache miss → routes to the fast endpoint; returns row[0] trimmed to CarteraStatus."""
+    from app.models.softseguros import CarteraStatus
+
+    stub_redis.get.return_value = None
+    stub_http.post.return_value = _make_response(200, {"token": "tok"})
+    raw_row = {
+        "fecha_pago": "2026-06-01",
+        "fecha_realizara_pago": "2026-07-10",
+        "fecha_realizo_pago": None,
+        "saldo_pendiente": "150000.00",
+        "edad_cartera": 36,
+        "ramo_nombre": "AUTOMÓVILES",
+        "poliza_codio_objeto_asegurado": "LMT78B",
+        "poliza_cliente_celular": "3001234567",  # PII — must NOT leak into CarteraStatus
+        "comicion": "12000",  # commission — must NOT leak into CarteraStatus
+    }
+    stub_http.get.return_value = _make_response(
+        200, {"count": 1, "next": None, "previous": None, "results": [raw_row]}
+    )
+
+    result = await mocked_client.get_cartera_status("POL123")
+
+    assert result == CarteraStatus(
+        fecha_pago="2026-06-01",
+        fecha_realizara_pago="2026-07-10",
+        fecha_realizo_pago=None,
+        saldo_pendiente="150000.00",
+        edad_cartera=36,
+        ramo_nombre="AUTOMÓVILES",
+        riesgo="LMT78B",
+    )
+    assert not hasattr(result, "poliza_cliente_celular")
+    assert not hasattr(result, "comicion")
+    call_args = stub_http.get.call_args
+    assert call_args.args[0] == "/api/pagopoliza/list_pagospolizas_filtro_paginados/"
+    params = call_args.kwargs.get("params")
+    assert params["sede"] == 1047
+    assert params["texto_busqueda"] == "POL123"
+    assert params["search_in"] == "poliza_numero_poliza"
+    assert params["tipo"] == "cartera_por_cobrar"
+
+
+@pytest.mark.asyncio
+async def test_get_cartera_status_returns_none_when_no_results(
+    mocked_client: Any, stub_http: MagicMock, stub_redis: MagicMock
+) -> None:
+    """No cartera pendiente (count=0) → None, not an empty CarteraStatus."""
+    stub_redis.get.return_value = None
+    stub_http.post.return_value = _make_response(200, {"token": "tok"})
+    stub_http.get.return_value = _make_response(
+        200, {"count": 0, "next": None, "previous": None, "results": []}
+    )
+
+    result = await mocked_client.get_cartera_status("POL999")
+
+    assert result is None
+
+
+def test_allowlist_includes_get_cartera_status() -> None:
+    """CI guard allowlist contains the new method name (Fase 6)."""
+    from tests.test_softseguros_readonly import METHOD_ALLOWLIST
+
+    assert "get_cartera_status" in METHOD_ALLOWLIST
+    assert "get_pagos" not in METHOD_ALLOWLIST

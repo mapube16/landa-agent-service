@@ -47,7 +47,7 @@ from tenacity import (
 )
 
 from app.config.settings import settings
-from app.models.softseguros import ClienteRaw, PolizaRaw
+from app.models.softseguros import CarteraStatus, ClienteRaw, PolizaRaw
 
 log = structlog.get_logger("integrations.softseguros")
 
@@ -201,7 +201,7 @@ class SoftSegurosClient:
         ``cache_id`` is the identifier used in the cache key (usually a
         poliza_id or cliente_id). Named generically to avoid colliding with
         callers that pass ``poliza_id`` as an HTTP query param via
-        ``**params`` (e.g. :meth:`get_pagos`).
+        ``**params`` (e.g. :meth:`get_cartera_status`).
         """
         cache_key = f"softseguros:{cache_id}:{query_type}".encode()
         cached: bytes | None = None
@@ -255,15 +255,38 @@ class SoftSegurosClient:
         """
         return await self.get_poliza(poliza_id)
 
-    async def get_pagos(self, poliza_id: str) -> PolizaRaw:
-        """GET ``/api/pagopoliza/?poliza_id={poliza_id}``.
+    async def get_cartera_status(self, poliza_id: str) -> CarteraStatus | None:
+        """GET ``/api/pagopoliza/list_pagospolizas_filtro_paginados/`` scoped to one poliza.
 
-        NOTE: per SOFTSEGUROS_API_NOTES.md, this endpoint times out at 504
-        for some pólizas. Prefer the embedded ``poliza.total_pagos_poliza``
-        field when available; this method is kept for completeness +
-        diagnostic use.
+        Replaces the old ``get_pagos`` (``/api/pagopoliza/?poliza_id=``, 504
+        for most pólizas — SOFTSEGUROS_API_NOTES.md open Q #3). This endpoint
+        is fast (~1s) and is the confirmed "cartera por cobrar" queue.
+
+        ``sede=1047`` is hardcoded (DPG, single-tenant v1 per CLAUDE.md — a
+        second tenant needs this configurable).
+
+        Returns the earliest overdue cuota (``order_by=fecha_pago&sort_by=asc``,
+        first row) trimmed to the :class:`CarteraStatus` allowlist (Capa 4 —
+        the raw response carries ~150 fields incl. commissions/PII), or
+        ``None`` if the poliza has no cartera pendiente (``count == 0``).
         """
-        return await self._cached_get(poliza_id, "pagos", "/api/pagopoliza/", poliza_id=poliza_id)
+        raw = await self._cached_get(
+            poliza_id,
+            "cartera_status",
+            "/api/pagopoliza/list_pagospolizas_filtro_paginados/",
+            sede=1047,
+            texto_busqueda=poliza_id,
+            search_in="poliza_numero_poliza",
+            tipo="cartera_por_cobrar",
+            fecha_a_buscar="cartera_por_cobrar",
+            order_by="fecha_pago",
+            sort_by="asc",
+            page=1,
+        )
+        results = raw.get("results", [])
+        if not results:
+            return None
+        return CarteraStatus.model_validate(results[0])
 
     async def get_clientes_by_documento(self, numero_documento: str) -> ClienteRaw:
         """GET ``/api/cliente/listar_cliente_por_documento/?numero_documento={doc}``.
