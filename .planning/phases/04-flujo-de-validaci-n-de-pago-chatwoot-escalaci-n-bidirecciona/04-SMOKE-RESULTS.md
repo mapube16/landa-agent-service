@@ -11,7 +11,7 @@ cartera +573173717828, bot +1 555 203 1790 (WA_PHONE_ID 1210226812169851).
 | 2 | Rechazo → escalacion + Chatwoot | PENDIENTE en vivo (cubierto por test E2E) |
 | 3 | Numero spoofeado se descarta en silencio | OK (allowlist verificada en vivo: solo cartera rutea; cubierto ademas por test E2E) |
 | 4 | Agente Chatwoot → cliente por WhatsApp | OK EN VIVO (`chatwoot.webhook.relayed`, mensaje recibido en el telefono del cliente) |
-| 5 | Handoff no-answer (lambda POST → template) | PENDIENTE en vivo (cubierto por test E2E; requiere template Meta APPROVED) |
+| 5 | Handoff no-answer (lambda POST → template) | **OK EN VIVO 2026-07-07** — `POST /case/handoff/no_answer` con token real → 200 `sent=true`, template `voice_no_answer_followup` entregado al numero de prueba (2 botones quick-reply). Retransmit mismo `case_id` → `sent=false` (idempotencia OK). Detras de esto se encontraron y arreglaron 2 bugs reales: (a) `log.error(event=...)` en `_post_message` colisionaba con la key reservada de structlog y crasheaba CUALQUIER error de Meta con un TypeError en vez de mostrarlo (`df08a5d`); (b) la plantilla aprobada NO tiene ninguna variable (ni header ni body) pese a que el editor de Meta mostraba `{Nombre del Cliente}` en la preview — confirmado en vivo con `#132000` dos veces hasta mandar 0 params (`18a9d40`). |
 | 6 | Output firewall bloquea confirmacion alucinada | OK (tests E2E + unit; determinismo no requiere vivo) |
 
 ## Bugs REALES encontrados y ARREGLADOS durante el smoke
