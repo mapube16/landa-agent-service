@@ -94,9 +94,10 @@ comisiones/PII), scopeado por póliza, nunca tool de búsqueda al LLM.
 - **Rotar `CHATWOOT_API_KEY`** (se filtró en terminal en sesión previa).
 - **Rotar el token SoftSeguros `b3565b44...`** (se pegó en una sesión de chat el
   2026-07-04 al compartir un curl).
-- `APP_ENV=dev`→`production` en web+worker.
-- Template Meta `voice_no_answer_followup`: confirmar estado APPROVED.
+- `APP_ENV=dev`→`production` en web+worker (aún en `dev`, confirmado 2026-07-06 vía `/health`).
+- ~~Template Meta `voice_no_answer_followup`: confirmar estado APPROVED.~~ **✅ APROBADO 2026-07-06** (copy final = informe técnico Mensaje 1 + 2 botones quick-reply, ver `04-CONTEXT.md` D-20/D-21).
 - Pasar el número WhatsApp de **modo test a live** en Meta (hoy máx 5 recipients).
+- **Bloqueador nuevo, lado VOICE (no es de este repo):** el número de **Twilio** (llamadas salientes de ARIA) aún no está aprobado (2026-07-06). Sin esto, lambda-proyect no puede originar la llamada que dispararía el escenario "no contestó" → el template de WA ya está listo pero no tiene qué disparar el flujo end-to-end todavía.
 
 ### D. Smoke E2E pendiente
 Criterios 1, 2, 5 en vivo (ver 04-SMOKE-RESULTS.md). El criterio 4 (Chatwoot→
