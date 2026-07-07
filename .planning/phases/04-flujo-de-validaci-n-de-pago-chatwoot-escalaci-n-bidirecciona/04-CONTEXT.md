@@ -76,8 +76,15 @@ Cliente envía comprobante de pago por WhatsApp → bot lo reenvía al número d
 
   Si necesitas ayuda, solo responde a este mensaje. ¡Excelente día! 😊
   ```
-  Variable: `{{nombre}}` = nombre del cliente (formato de variable nombrada, no
-  posicional — Meta lo exige así ahora). Sin variable de póliza/riesgo.
+  **CONFIRMADO EN VIVO 2026-07-07: la plantilla aprobada por Meta NO tiene
+  NINGUNA variable** (ni `{{nombre}}` en el header, ni nada en el body) —
+  pese a que la vista previa del editor mostraba `{Nombre del Cliente}`, eso
+  quedó como texto/preview del editor, no como variable real guardada. Meta
+  rechazó el envío dos veces con `#132000` ("number of localizable_params
+  (N) does not match the expected number of params (0)") hasta mandar 0
+  params en header Y en body. `handoff_no_answer` manda `body_params=[]` sin
+  `header_params` — `cliente_nombre` ya no se usa en el envío del template
+  (sigue guardándose en `Case.cliente_nombre` para otros usos).
 - **D-21:** Botones quick-reply **"Personalizado"** (no "Llamada a la acción"):
   **`Sí, ayúdenme`** y **`Más tarde`**. Se agregaron ENCIMA del texto oficial del
   informe (el body no los menciona explícitamente, pero un botón no requiere

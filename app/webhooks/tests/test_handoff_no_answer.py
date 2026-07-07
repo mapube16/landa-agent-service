@@ -141,7 +141,6 @@ async def test_happy_path_creates_case_and_sends_template(
         "es",
         body_params=[],
         quick_reply_payloads=["si_ayudenme", "mas_tarde"],
-        header_params=["Juan"],
     )
     assert session.commits == 1
     case = session.added[0]

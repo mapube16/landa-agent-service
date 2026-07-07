@@ -124,7 +124,6 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
         "es",
         body_params=[],
         quick_reply_payloads=["si_ayudenme", "mas_tarde"],
-        header_params=[body.cliente_nombre],
     )
     log.info(
         "handoff.no_answer.template_sent",
