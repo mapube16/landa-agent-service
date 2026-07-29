@@ -328,6 +328,7 @@ async def _run_and_dispatch(
                     client_phone=phone,
                     reason=final_state.get("escalation_reason"),
                     cliente_nombre=final_state.get("cliente_nombre"),
+                    chatwoot=getattr(app_state, "chatwoot", None),
                 )
 
         # Chatwoot mark_resolved only on normal conversation close.

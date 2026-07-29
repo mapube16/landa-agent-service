@@ -46,6 +46,35 @@ class TestCheckOutbound:
         assert allowed is True
         assert reason is None
 
+    def test_al_dia_assertion_blocked(self) -> None:
+        """'está al día' (solvency certification) blocked without approval."""
+        from app.security.output_firewall import check_outbound
+
+        allowed, reason = check_outbound(
+            "Te confirmo que tu póliza está al día.", payment_approved=False
+        )
+        assert allowed is False
+
+    def test_system_not_updated_speculation_blocked(self) -> None:
+        """The bot must not speculate that the system hasn't applied the payment."""
+        from app.security.output_firewall import check_outbound
+
+        allowed, reason = check_outbound(
+            "Es posible que el sistema no se hubiera actualizado aún con tu pago.",
+            payment_approved=False,
+        )
+        assert allowed is False
+
+    def test_concrete_pending_balance_still_allowed(self) -> None:
+        """Reporting a concrete pending balance is fine — only NO-debt is blocked."""
+        from app.security.output_firewall import check_outbound
+
+        allowed, reason = check_outbound(
+            "Tu saldo pendiente es de $150.000 con fecha 2026-08-01.",
+            payment_approved=False,
+        )
+        assert allowed is True
+
     def test_case_insensitive_match(self) -> None:
         """Pattern matching is case-insensitive (D-28)."""
         from app.security.output_firewall import check_outbound

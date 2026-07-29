@@ -34,6 +34,26 @@ _PAYMENT_CONFIRMED_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
+# Certificaciones de solvencia (extensión D-28, decisión DPG 29-jul): afirmar
+# "está al día / sin saldo pendiente / puedes estar tranquilo" equivale a
+# confirmar un pago — y esa verificación es EXCLUSIVA del equipo de cartera.
+# Observado en vivo: el bot certificó "tu póliza está al día" tras recibir un
+# comprobante. Informar un saldo pendiente CONCRETO ("tu saldo pendiente es de
+# $X") sigue permitido — estos patrones solo capturan la afirmación de NO deuda.
+_NO_DEBT_ASSERTION_RE: re.Pattern[str] = re.compile(
+    r"no\s+(tienes|tiene|hay|aparece|registra|queda)\s+(ning[uú]n\s+)?saldo"
+    r"|sin\s+saldo\s+pendiente"
+    r"|est[aá]\s+al\s+d[ií]a"
+    r"|puedes?\s+estar\s+tranquil[oa]"
+    r"|ya\s+(est[aá]|qued[oó])\s+pagad[oa]"
+    r"|no\s+debes?\s+nada"
+    # El bot NO debe especular sobre por qué el sistema muestra saldo cero
+    # ("el sistema no se había actualizado con tu pago") — eso es concluir
+    # que el pago ya entró, competencia exclusiva de cartera (visto en vivo).
+    r"|sistema\s+.{0,40}\bno\s+.{0,15}\bactualiz" r"|no\s+.{0,15}\bactualiz.{0,40}\btu\s+pago",
+    re.IGNORECASE,
+)
+
 
 def check_outbound(text: str, *, payment_approved: bool) -> tuple[bool, str | None]:
     """Check whether ``text`` is safe to send given the payment state.
@@ -53,6 +73,12 @@ def check_outbound(text: str, *, payment_approved: bool) -> tuple[bool, str | No
         return (
             False,
             f"payment_confirmation_without_approval: {match.group()!r}",
+        )
+    match = _NO_DEBT_ASSERTION_RE.search(text)
+    if match and not payment_approved:
+        return (
+            False,
+            f"no_debt_assertion_without_approval: {match.group()!r}",
         )
     return True, None
 

@@ -112,6 +112,36 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+_DIAN_WEIGHTS = (3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71)
+
+
+def _nit_dv(nit_digits: str) -> str:
+    """Dígito de verificación DIAN para un NIT (algoritmo estándar)."""
+    total = sum(int(d) * w for d, w in zip(reversed(nit_digits), _DIAN_WEIGHTS, strict=False))
+    resto = total % 11
+    return str(resto if resto < 2 else 11 - resto)
+
+
+def _documento_candidates(text: str) -> list[str]:
+    """Ordered lookup candidates for a typed document number.
+
+    Companies must not need to type the NIT's dígito de verificación
+    (requisito DPG): clean separators, then try as-typed, then with the
+    computed DV appended (NIT-shaped inputs), then without a trailing DV.
+    SoftSeguros stores NITs with the DV (probe fixture ``900144220-7``).
+    """
+    cleaned = text.strip().replace(".", "").replace(" ", "")
+    candidates = [cleaned]
+    if "-" not in cleaned and cleaned.isdigit() and 8 <= len(cleaned) <= 10:
+        candidates.append(f"{cleaned}-{_nit_dv(cleaned)}")
+    if "-" in cleaned:
+        base = cleaned.split("-", 1)[0]
+        if base.isdigit():
+            candidates.append(base)
+    # preserve order, drop dups
+    return list(dict.fromkeys(candidates))
+
+
 def _last_human_text(state: QAState) -> str:
     """Return the content of the most recent HumanMessage in state, or ''."""
     for msg in reversed(state["messages"]):
@@ -231,7 +261,7 @@ def _retry_or_escalate(doc_retries: int, text: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def node_identify(state: QAState) -> dict[str, Any]:
+async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
     """Identify client by document number and fetch their pólizas.
 
     Returns state mutations — never raises (all exceptions caught and routed
@@ -264,12 +294,30 @@ async def node_identify(state: QAState) -> dict[str, Any]:
 
     try:
         client = get_softseguros_client()
-        # Step 1: get cliente by documento
-        cliente = await client.get_clientes_by_documento(text)
-        cliente_id: int | None = cliente.get("id") if isinstance(cliente, dict) else None
+        # Step 1: get cliente by documento — try normalized variants so a
+        # company never needs to type the NIT's dígito de verificación
+        # (requisito DPG; DV computed with the standard DIAN algorithm).
+        cliente_id: int | None = None
+        last_404: Exception | None = None
+        for candidate in _documento_candidates(text):
+            try:
+                cliente = await client.get_clientes_by_documento(candidate)
+            except Exception as lookup_exc:  # noqa: BLE001
+                status_c = getattr(getattr(lookup_exc, "response", None), "status_code", None)
+                if status_c == 404:
+                    last_404 = lookup_exc
+                    continue  # try next variant
+                raise
+            cliente_id = cliente.get("id") if isinstance(cliente, dict) else None
+            if cliente_id is not None:
+                break
 
         if cliente_id is None:
-            # Document not found (no cliente returned)
+            if last_404 is not None:
+                # Every variant 404'd — re-raise so the outer 404 branch sends
+                # the friendly not-found message with the human-escape button.
+                raise last_404
+            # Cliente returned but without id (no policies linked)
             return _retry_or_escalate(state.get("doc_retries", 0), text)
 
         # Step 2: get polizas for this cliente

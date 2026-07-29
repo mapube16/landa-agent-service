@@ -32,6 +32,8 @@ import re
 T_01: str = (
     "¡Hola! \U0001f44b Soy ARIA, el asistente virtual de DPG Seguros."
     " Para ayudarte, ¿me das tu número de documento?"
+    " Si es una empresa, escribe el NIT con su dígito de verificación"
+    " (ejemplo: 900123456-7)."
 )
 
 T_02: str = (

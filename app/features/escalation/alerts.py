@@ -39,16 +39,36 @@ async def notify_team_escalation(
     client_phone: str,
     reason: str | None = None,
     cliente_nombre: str | None = None,
+    chatwoot: Any = None,
 ) -> None:
-    """Send the escalation alert to the cartera WhatsApp (fail-open, deduped)."""
+    """Alert the DPG team on escalation (fail-open, deduped).
+
+    Two channels: a private note inside the client's Chatwoot conversation
+    (so the team sees it in context) plus a WhatsApp to cartera (always-on
+    channel). Both are best-effort and independent.
+    """
     from app.config.settings import settings
 
-    cartera_list = list(settings.payment.cartera_phone_allowlist)
-    if not cartera_list:
-        log.warning("escalation_alert.no_cartera_configured")
-        return
-
     phone_norm = _normalize_e164(client_phone)
+    quien = f"{cliente_nombre} ({phone_norm})" if cliente_nombre else phone_norm
+    motivo = {
+        "escape_hatch": "el cliente pidió hablar con una persona",
+        "doc_exhausted": "no se pudo identificar al cliente",
+        "judge_exhausted": "el asistente no pudo dar una respuesta validada",
+        "breaker": "falla técnica consultando SoftSeguros",
+    }.get(reason or "", reason or "solicitud de atención humana")
+
+    # Private note inside the Chatwoot conversation (team sees it in context).
+    # BEFORE the dedupe gate — a note per escalation is useful history; the
+    # dedupe only throttles the outbound WhatsApp blast to cartera.
+    if chatwoot is not None:
+        try:
+            conv_id = await chatwoot.get_or_create_conversation(phone_norm)
+            await chatwoot.post_private_note(
+                conv_id, f"🔔 Escalación: {quien} necesita atención humana — {motivo}."
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("escalation_alert.chatwoot_note_failed", error_type=type(exc).__name__)
 
     if redis is not None:
         try:
@@ -64,13 +84,11 @@ async def notify_team_escalation(
         except Exception as exc:  # noqa: BLE001
             log.warning("escalation_alert.dedupe_failed", error_type=type(exc).__name__)
 
-    quien = f"{cliente_nombre} ({phone_norm})" if cliente_nombre else phone_norm
-    motivo = {
-        "escape_hatch": "el cliente pidió hablar con una persona",
-        "doc_exhausted": "no se pudo identificar al cliente",
-        "judge_exhausted": "el asistente no pudo dar una respuesta validada",
-        "breaker": "falla técnica consultando SoftSeguros",
-    }.get(reason or "", reason or "solicitud de atención humana")
+    cartera_list = list(settings.payment.cartera_phone_allowlist)
+    if not cartera_list:
+        log.warning("escalation_alert.no_cartera_configured")
+        return
+
     body = (
         f"🔔 ALERTA DPG: {quien} necesita atención humana en WhatsApp — {motivo}. "
         f"La conversación está abierta en Chatwoot (chat.landatech.org)."

@@ -90,6 +90,26 @@ class ChatwootClient:
             content_len=len(content),
         )
 
+    async def post_private_note(self, conversation_id: int, content: str) -> None:
+        """POST an internal private note (team-only, never sent to the client).
+
+        Used for escalation alerts so the DPG team sees them inside the
+        conversation. ``private: true`` — the outbound webhook drops these
+        (filter ``private_note``), so no relay-loop risk and no bot_mirror
+        marker needed.
+        """
+        path = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/messages"
+        r = await self._http.post(
+            path,
+            json={"content": content, "message_type": "outgoing", "private": True},
+        )
+        r.raise_for_status()
+        log.info(
+            "chatwoot.post_private_note.ok",
+            conv_id=conversation_id,
+            content_len=len(content),
+        )
+
     async def post_attachment(
         self,
         conversation_id: int,
