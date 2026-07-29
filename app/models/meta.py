@@ -65,6 +65,23 @@ class InteractiveReply(BaseModel):
         return None
 
 
+class MessageButton(BaseModel):
+    """``message.button`` payload — tap en un quick-reply de PLANTILLA.
+
+    Meta envía los taps de botones de plantilla como ``type="button"`` con
+    este objeto (``payload`` = el payload que definimos al enviar la
+    plantilla, p.ej. ``si_ayudenme``; ``text`` = la etiqueta que vio el
+    usuario). Es DISTINTO de ``type="interactive"`` (botones/listas de
+    mensajes interactivos de sesión) — sin este modelo los taps de plantilla
+    caían al branch de "unsupported type" y se ignoraban en silencio.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    payload: str | None = None
+    text: str | None = None
+
+
 class MediaObject(BaseModel):
     """``message.image`` / ``message.document`` payload (F4, Plan 04-04).
 
@@ -109,6 +126,8 @@ class InboundMessage(BaseModel):
     text: MessageText | None = None
     # Poblado cuando type=="interactive" — respuesta de botón o lista.
     interactive: InteractiveReply | None = None
+    # Poblado cuando type=="button" — tap en quick-reply de plantilla.
+    button: MessageButton | None = None
     # F4 (Plan 04-04): comprobante media — poblado cuando type=="image"/"document".
     # El webhook los enruta al flujo de pago (process_attachment).
     image: MediaObject | None = None

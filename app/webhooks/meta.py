@@ -786,6 +786,26 @@ async def _dispatch_message(  # noqa: C901
         )
         return
 
+    # Tap en quick-reply de PLANTILLA (type="button" — distinto del
+    # "interactive" de arriba): Meta manda el payload que definimos al enviar
+    # la plantilla (si_ayudenme / mas_tarde). Se trata como texto del usuario,
+    # misma ruta que el interactive. Sin este branch los taps de plantilla
+    # caían a "unsupported type" y se ignoraban en silencio (observado 29-jul
+    # con voice_no_answer_followup: el cliente tocaba el botón y no pasaba nada).
+    if msg.type == "button" and msg.button is not None:
+        selected = msg.button.payload or msg.button.text
+        if selected:
+            msg.text = MessageText(body=selected)
+            await _handle_text_message(msg=msg, meta=meta, phone_hash=phone_hash, request=request)
+            return
+        log.info(
+            "webhook.template_button.empty",
+            message_id=msg.id,
+            phone_hash=phone_hash,
+            result="ignored_empty_button",
+        )
+        return
+
     # F4 (Plan 04-04): inbound comprobante (image or document/PDF) → payment flow.
     if msg.type in {"image", "document"}:
         await _handle_comprobante(msg=msg, request=request, phone_hash=phone_hash)
