@@ -80,6 +80,38 @@ async def test_aggregates_audit_and_labels(client: AsyncClient) -> None:
     assert body["fecha"] == "2026-07-29"
 
 
+async def test_audit_flag_runs_quality_auditor(client: AsyncClient, monkeypatch: Any) -> None:
+    """audit=true adds anomaly counts from the LLM auditor over active convs."""
+    from app.features.metrics.quality import QualityRubric
+
+    app_state = client._transport.app.state  # type: ignore[attr-defined]
+    # conv 2 had client activity → gets audited; give it messages
+    app_state.chatwoot.list_messages = AsyncMock(
+        return_value=[{"message_type": 0, "content": "ya pagué"}]
+    )
+
+    async def _fake_audit(_msgs: Any) -> QualityRubric:
+        return QualityRubric(
+            intento_certificar_pago=True,
+            lista_rota=False,
+            loop_sin_salida=False,
+            cliente_frustrado=False,
+            rationale="x",
+        )
+
+    # The endpoint imports audit_conversation from this module at call time,
+    # so patch it at the source.
+    import app.features.metrics.quality as q_mod
+
+    monkeypatch.setattr(q_mod, "audit_conversation", _fake_audit)
+
+    r = await client.get("/metrics/daily?day=2026-07-29&audit=true", headers=AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert "anom_intento_certificar_pago" in body
+    assert body["conversaciones_auditadas"] >= 1
+
+
 async def test_chatwoot_down_still_returns_audit(client: AsyncClient) -> None:
     """A Chatwoot outage must not 500 the endpoint — audit metrics still serve."""
     client._transport.app.state.chatwoot.list_conversations.side_effect = RuntimeError("down")  # type: ignore[attr-defined]
