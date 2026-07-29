@@ -93,6 +93,24 @@ def _temperature_for(role: LLMRole) -> float:
     return 0.0 if role == "judge" else 0.7
 
 
+def _max_tokens_for(role: LLMRole) -> int:
+    """Return the role-specific output-token cap.
+
+    Without an explicit ``max_tokens`` the request inherits the model's max
+    output (65,536 for Gemini 2.5 Pro) and OpenRouter demands enough balance
+    to cover that worst case — with a low balance every call 402s even though
+    real replies are tiny (observed 29-jul in prod: ``qa_graph.run_failed``
+    with "can only afford 65065"). WhatsApp replies are 1-3 short paragraphs;
+    these caps are generous for the actual outputs and bound per-call cost.
+    """
+    return {
+        "conversation": 1024,
+        "judge": 512,
+        "intent_classifier": 128,
+        "summarizer": 1024,
+    }[role]
+
+
 @lru_cache(maxsize=8)
 def _get_llm_resolved(role: LLMRole) -> ChatOpenAI:
     """Construct (and cache) a ``ChatOpenAI`` instance for the resolved role."""
@@ -107,6 +125,7 @@ def _get_llm_resolved(role: LLMRole) -> ChatOpenAI:
             "X-Title": "landa-agent-service",
         },
         "temperature": _temperature_for(role),
+        "max_tokens": _max_tokens_for(role),
         "timeout": 30,
         "max_retries": 2,
     }
