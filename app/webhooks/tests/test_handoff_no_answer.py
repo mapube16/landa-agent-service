@@ -102,15 +102,23 @@ async def client(meta: MagicMock, session: _FakeSession) -> AsyncIterator[AsyncC
 async def test_seed_without_documento_sets_context_only(
     client: AsyncClient, meta: MagicMock, session: _FakeSession
 ) -> None:
-    """No documento → seed carries greeting context but never locks a poliza."""
+    """No documento → seed carries greeting context but never locks a poliza.
+
+    The thread is RESET first: a new handoff supersedes any stale prior
+    conversation state (old poliza/polizas_list from earlier sessions).
+    """
     qa_graph = MagicMock()
     qa_graph.aupdate_state = AsyncMock()
+    checkpointer = MagicMock()
+    checkpointer.adelete_thread = AsyncMock()
     transport = client._transport  # type: ignore[attr-defined]
     transport.app.state.qa_graph = qa_graph  # type: ignore[attr-defined]
+    transport.app.state.checkpointer = checkpointer  # type: ignore[attr-defined]
 
     r = await client.post("/case/handoff/no_answer", json=_body(), headers=AUTH)
     assert r.status_code == 200
 
+    checkpointer.adelete_thread.assert_awaited_once_with(PHONE)
     qa_graph.aupdate_state.assert_awaited_once()
     values = qa_graph.aupdate_state.await_args.kwargs["values"]
     assert values["handoff_numero_poliza"] == "12345"

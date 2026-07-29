@@ -165,10 +165,24 @@ async def _seed_qa_thread(request: Request, body: NoAnswerHandoff) -> None:
     resolves documento -> cliente -> polizas -> matching numero and seeds
     ``poliza_id`` — the entry router then dispatches straight to
     ``answering_qa`` and the client is never asked for their document.
+
+    RESET FIRST: a new handoff means a NEW conversation about a specific
+    poliza — any prior thread state (old poliza_id, old polizas_list, old
+    cliente_doc) is stale by definition. Seeding used to MERGE into leftover
+    state and the client saw the PREVIOUS document's policies (found live
+    2026-07-29 on the heavily-reused test phone).
     """
     qa_graph = getattr(request.app.state, "qa_graph", None)
     if qa_graph is None:
         return
+
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
+        try:
+            await checkpointer.adelete_thread(body.phone)
+            log.info("handoff.no_answer.thread_reset", phone_hash=_hash_phone(body.phone))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("handoff.no_answer.thread_reset_failed", error_type=type(exc).__name__)
 
     seed: dict[str, object] = {
         "wa_phone": body.phone.lstrip("+"),
