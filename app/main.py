@@ -60,6 +60,7 @@ from app.security.kb_auditor import audit_kb  # noqa: E402
 from app.webhooks.chatwoot import router as chatwoot_webhook_router  # noqa: E402
 from app.webhooks.handoff import router as handoff_router  # noqa: E402
 from app.webhooks.meta import router as meta_router  # noqa: E402
+from app.webhooks.metrics import router as metrics_router  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -191,6 +192,7 @@ app.include_router(health_router)
 app.include_router(meta_router)
 app.include_router(chatwoot_webhook_router)
 app.include_router(handoff_router)
+app.include_router(metrics_router)
 
 
 @app.post("/test/llm")
