@@ -30,7 +30,7 @@ import re
 
 # Greeting -- asks for document number (D-01 override: documento, not poliza).
 T_01: str = (
-    "¡Hola! \U0001f44b Soy el asistente virtual de DPG Seguros."
+    "¡Hola! \U0001f44b Soy ARIA, el asistente virtual de DPG Seguros."
     " Para ayudarte, ¿me das tu número de documento?"
 )
 

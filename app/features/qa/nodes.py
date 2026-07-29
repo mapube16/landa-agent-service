@@ -249,7 +249,7 @@ async def node_identify(state: QAState) -> dict[str, Any]:
             nombre = state.get("cliente_nombre") or ""
             saludo = f"¡Hola{', ' + nombre if nombre else ''}! 👋 "
             greeting = (
-                f"{saludo}Soy el asistente virtual de DPG Seguros. Te escribimos "
+                f"{saludo}Soy ARIA, el asistente virtual de DPG Seguros. Te escribimos "
                 f"por tu póliza POL-{handoff_numero}. Para confirmar tu identidad "
                 "y mostrarte la información, ¿me das tu número de documento?"
             )
