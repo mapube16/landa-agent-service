@@ -368,12 +368,14 @@ async def test_post_duplicate_message_id_skips_dispatch(
     assert arq_mock.enqueue_job.await_count <= 1
 
 
-async def test_post_non_allowlisted_sender_skips_dispatch(
+async def test_post_non_allowlisted_sender_still_dispatches(
     client: AsyncClient,
     stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
 ) -> None:
+    """The WA_ECHO_ALLOWLIST client gate was removed to exit Meta test mode —
+    any non-cartera sender now reaches the QA graph like any other client."""
     meta_mock, redis_mock, qa_graph_mock, arq_mock = stub_app_state_f3
-    body = _inbound_text_payload(from_="19999999999")  # NOT in WA_ECHO_ALLOWLIST
+    body = _inbound_text_payload(from_="19999999999")  # not a special number
     sig = _sign(body)
     r = await client.post(
         "/webhooks/meta",
@@ -382,9 +384,7 @@ async def test_post_non_allowlisted_sender_skips_dispatch(
     )
     assert r.status_code == 200
     await asyncio.sleep(0.05)
-    qa_graph_mock.ainvoke.assert_not_called()
-    meta_mock.send_text.assert_not_called()
-    # Dedup gate still runs (D-15 order: dedup happens before allowlist).
+    qa_graph_mock.ainvoke.assert_called_once()
     redis_mock.set.assert_awaited_once()
 
 

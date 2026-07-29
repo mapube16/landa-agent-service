@@ -99,7 +99,8 @@ Detalle + caveats en `.planning/phases/02-*/SOFTSEGUROS_API_NOTES.md`.
   2026-07-04 al compartir un curl).
 - ~~`APP_ENV=dev`→`production` en web+worker~~ **✅ HECHO 2026-07-07** (`APP_ENV=prod` — OJO: el código usa el Literal `"prod"`, NO `"production"`; poner `"production"` crashea el arranque, ya pasó una vez).
 - ~~Template Meta `voice_no_answer_followup`: confirmar estado APPROVED.~~ **✅ APROBADO 2026-07-06** (copy final = informe técnico Mensaje 1 + 2 botones quick-reply, ver `04-CONTEXT.md` D-20/D-21).
-- Pasar el número WhatsApp de **modo test a live** en Meta (hoy máx 5 recipients).
+- Pasar el número WhatsApp de **modo test a live** en Meta (hoy máx 5 recipients) — **acción pendiente en el Business Manager de Meta, fuera de este repo**.
+- **✅ HECHO 2026-07-08 (lado código):** se eliminó el gate `is_echo_allowed`/`WA_ECHO_ALLOWLIST` de `app/webhooks/meta.py` (era un allowlist transicional de la Fase 2, vestigio del echo bot pre-LangGraph que seguía bloqueando silenciosamente cualquier número no registrado). Ahora cualquier número no-cartera llega al grafo QA normalmente. El resto del stack de seguridad (rate limiting Fase 5, HMAC, prompt firewall, judge) sigue intacto — esto solo quitaba una capa extra de allowlist manual. La función `is_echo_allowed` en `app/features/handoff/echo.py` sigue existiendo (no se llama desde ningún lado en prod) por si se quiere un piloto controlado en el futuro. **Esto NO reemplaza la acción en Meta arriba** — si el número de Meta sigue en modo test, Meta mismo seguirá limitando a 5 destinatarios sin importar este cambio.
 - **Bloqueador nuevo, lado VOICE (no es de este repo):** el número de **Twilio** (llamadas salientes de ARIA) aún no está aprobado (2026-07-06). Sin esto, lambda-proyect no puede originar la llamada que dispararía el escenario "no contestó" → el template de WA ya está listo pero no tiene qué disparar el flujo end-to-end todavía.
 
 ### D. Smoke E2E pendiente

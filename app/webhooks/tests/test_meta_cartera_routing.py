@@ -163,10 +163,11 @@ async def test_cartera_number_routes_to_handler(
 
 
 @pytest.mark.asyncio
-async def test_unknown_number_silently_dropped(
+async def test_unknown_number_routes_to_qa(
     client_with_cartera: tuple[AsyncClient, MagicMock, MagicMock],
 ) -> None:
-    """Unknown number (neither cartera nor client allowlist) must be silently dropped."""
+    """Unknown number (not cartera) routes to QA like any other client — the
+    WA_ECHO_ALLOWLIST client gate was removed to exit Meta test mode."""
     ac, qa_graph, meta_client = client_with_cartera
     body = _meta_payload(UNKNOWN_PHONE)
 
@@ -176,10 +177,7 @@ async def test_unknown_number_silently_dropped(
 
     assert r.status_code == 200
     mock_cartera.assert_not_called()
-    mock_qa.assert_not_called()
-    # No outbound send calls
-    meta_client.send_text.assert_not_called()
-    meta_client.send_buttons.assert_not_called()
+    mock_qa.assert_called_once()
 
 
 @pytest.mark.asyncio

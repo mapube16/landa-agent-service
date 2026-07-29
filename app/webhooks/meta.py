@@ -56,7 +56,6 @@ from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
 from app.config.settings import settings
-from app.features.handoff.echo import is_echo_allowed
 from app.features.payment.attachment import has_blocked_extension
 from app.features.payment.cartera import handle_cartera_message
 from app.features.qa.messages import ESCAPE_REGEX, T_06
@@ -696,19 +695,6 @@ async def _dispatch_message(  # noqa: C901
             await meta.send_text(to=msg.from_, body=T_RATE_LIMITED)
         except Exception as exc:  # noqa: BLE001
             log.error("webhook.rate_limited.send_failed", error_type=type(exc).__name__)
-        return
-
-    # 4d. Client allowlist (D-02 + Pitfall 8 E.164 normalization).
-    #     Unknown numbers (not cartera, not client) are silently dropped here
-    #     — no outbound, no ARQ enqueue (T-04-05-04, D-06).
-    if not is_echo_allowed(msg.from_):
-        log.info(
-            "webhook.ignored.not_allowlisted",
-            message_id=msg.id,
-            message_type=msg.type,
-            phone_hash=phone_hash,
-            result="ignored_not_allowlisted",
-        )
         return
 
     # 4e. Text message: firewall + escape hatch + graph dispatch (Plan 03-05).
