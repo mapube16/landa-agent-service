@@ -21,6 +21,56 @@ def test_get_coberturas_schema_excludes_poliza_id() -> None:
     assert "poliza_id" not in get_coberturas.tool_call_schema.model_fields
 
 
+def test_get_info_general_schema_excludes_poliza_id() -> None:
+    from app.features.qa.tools import get_info_general
+
+    assert "poliza_id" not in get_info_general.tool_call_schema.model_fields
+
+
+async def test_get_info_general_maps_and_sanitizes(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Maps upstream field names (aseguradora, riesgo) and enriches with cartera."""
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    import app.features.qa.tools as tools_mod
+
+    ss = MagicMock()
+    ss.get_poliza = AsyncMock(
+        return_value={
+            "numero_poliza": "6865352-1",
+            "estado_poliza_nombre": "Devengada",
+            "ramo_nombre": "AUTOMÓVILES",
+            "ramo_aseguradora_nombre": "PREVISORA",
+            "codio_objeto_asegurado": "ZVL663",
+            "prima": "6444960.00",
+            "fecha_inicio": "2016-02-04",
+            "fecha_fin": "2016-03-05",
+            "estado_cartera": "Sin pagos Asignados",
+            "campo_prohibido": "secreto",
+        }
+    )
+    ss.get_cartera_status = AsyncMock(
+        return_value=SimpleNamespace(saldo_pendiente="0.00", fecha_realizara_pago=None)
+    )
+    monkeypatch.setattr(tools_mod, "get_softseguros_client", lambda: ss)
+
+    result = await get_info_general_invoke("228700")
+    parsed = json.loads(result)
+    assert parsed["aseguradora"] == "PREVISORA"
+    assert parsed["riesgo_asegurado"] == "ZVL663"
+    assert parsed["estado_poliza_nombre"] == "Devengada"
+    assert parsed["saldo_pendiente"] == "0.00"
+    assert "campo_prohibido" not in parsed
+
+
+async def get_info_general_invoke(poliza_id: str) -> str:
+    """Invoke the tool's underlying coroutine directly (bypassing InjectedState)."""
+    from app.features.qa.tools import get_info_general
+
+    return await get_info_general.coroutine(poliza_id)  # type: ignore[misc]
+
+
 def test_escalate_to_human_schema_has_only_reason() -> None:
     from app.features.qa.tools import escalate_to_human
 

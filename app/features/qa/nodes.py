@@ -33,7 +33,13 @@ from app.features.qa.knowledge_base import load_kb
 from app.features.qa.messages import T_01, T_02, T_03, T_06, T_07, T_08
 from app.features.qa.prompts import system_prompt
 from app.features.qa.state import QAState
-from app.features.qa.tools import escalate_to_human, get_coberturas, get_estado, get_saldo
+from app.features.qa.tools import (
+    escalate_to_human,
+    get_coberturas,
+    get_estado,
+    get_info_general,
+    get_saldo,
+)
 from app.integrations.openrouter import get_llm
 from app.integrations.softseguros import get_softseguros_client
 from app.security import audit_log
@@ -41,7 +47,7 @@ from app.security.judge import is_approved, judge_response
 
 log = structlog.get_logger("features.qa.nodes")
 
-_TOOLS = [get_saldo, get_estado, get_coberturas, escalate_to_human]
+_TOOLS = [get_saldo, get_estado, get_coberturas, get_info_general, escalate_to_human]
 
 # Emoji number prefixes for policy lists (D-02)
 _EMOJI_NUMS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
@@ -49,7 +55,7 @@ _EMOJI_NUMS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣",
 # WhatsApp interactive list cap per Meta docs.
 _LIST_PAGE_SIZE = 9  # 9 polizas + 1 "Ver más" row = 10 total (Meta limit)
 _MORE_BUTTON_ID = "__more"
-_QA_BUTTON_IDS = {"saldo", "estado", "coberturas", "agente"}
+_QA_BUTTON_IDS = {"saldo", "estado", "coberturas", "info_general", "agente"}
 
 
 def _session_factory_fn() -> Any:
@@ -122,7 +128,7 @@ def _build_policy_list(polizas: list[dict[str, Any]]) -> str:
         numero = p.get("numero_poliza", p.get("id", "?"))
         ramo = p.get("ramo_nombre", p.get("ramo", ""))
         estado = p.get("estado_poliza_nombre", p.get("estado", ""))
-        riesgo = p.get("poliza_codio_objeto_asegurado") or ""
+        riesgo = p.get("codio_objeto_asegurado") or p.get("poliza_codio_objeto_asegurado") or ""
         detail = ", ".join(x for x in (ramo, riesgo, estado) if x)
         lines.append(f"{emoji} POL-{numero} ({detail})")
     return "\n".join(lines)
@@ -150,7 +156,7 @@ def _polizas_list_message(polizas: list[dict[str, Any]], page: int) -> AIMessage
         # Informe §5: the list must show ramo + riesgo asegurado + numero.
         # "riesgo" = upstream field poliza_codio_objeto_asegurado (sic) — the
         # insured object (e.g. the plate for AUTOMÓVILES).
-        riesgo = p.get("poliza_codio_objeto_asegurado") or ""
+        riesgo = p.get("codio_objeto_asegurado") or p.get("poliza_codio_objeto_asegurado") or ""
         title = f"POL-{numero}"[:24]
         desc_parts = [x for x in (ramo, riesgo, estado) if x]
         desc = " · ".join(desc_parts)[:72] if desc_parts else None
@@ -195,7 +201,7 @@ def _qa_menu_message(numero: str) -> AIMessage:
                 "buttons": [
                     ("saldo", "Saldo"),
                     ("estado", "Estado"),
-                    ("coberturas", "Coberturas"),
+                    ("info_general", "Información"),
                 ],
             },
             "send_to_client": True,

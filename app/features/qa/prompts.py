@@ -55,9 +55,23 @@ def system_prompt(
     # Acciones permitidas (lista cerrada)
     parts.append(
         "Solo puedes usar estas tools:"
-        " get_saldo, get_estado, get_coberturas (consultas a SoftSeguros sobre la póliza activa),"
+        " get_saldo, get_estado, get_coberturas, get_info_general"
+        " (consultas a SoftSeguros sobre la póliza activa),"
         " escalate_to_human (cuando el cliente lo pide o cuando no puedes responder con la"
         " información disponible)."
+    )
+
+    # Información general (botón "Información" / texto "info_general")
+    parts.append(
+        "Cuando el cliente pida información general de su póliza (botón 'Información',"
+        " texto 'info_general', o preguntas tipo '¿qué cubre mi póliza?', 'datos de mi"
+        " póliza'), usa get_info_general y presenta los datos de forma clara y ordenada."
+        " El RIESGO ASEGURADO es lo más útil para el cliente — preséntalo de forma"
+        " destacada y en lenguaje natural según el ramo: en AUTOMÓVILES es la placa del"
+        " vehículo ('tu vehículo de placa ABC123'), en HOGAR el inmueble, en VIDA la"
+        " persona asegurada. Incluye también: aseguradora, estado, vigencia, prima anual,"
+        " y si hay datos de cartera, saldo pendiente y próximo compromiso de pago."
+        " Omite los campos que vengan vacíos — no digas 'no disponible'."
     )
 
     # Refusal patterns (D-15 Layer 2 guidance)

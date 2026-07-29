@@ -60,6 +60,22 @@ ESTADO_ALLOWLIST: list[str] = [
 
 COBERTURAS_NESTED_ALLOWLIST: list[str] = ["nombre", "monto_asegurado", "deducible"]
 
+# Informe §5 "información principal": estado, aseguradora, riesgo asegurado,
+# prima, vigencia + (si hay datos de cartera) saldo y próximo compromiso.
+INFO_GENERAL_ALLOWLIST: list[str] = [
+    "numero_poliza",
+    "estado_poliza_nombre",
+    "ramo_nombre",
+    "aseguradora",
+    "riesgo_asegurado",
+    "prima",
+    "fecha_inicio",
+    "fecha_fin",
+    "estado_cartera",
+    "saldo_pendiente",
+    "proximo_compromiso_pago",
+]
+
 
 def _clean_value(v: Any) -> Any:
     """Strip injection patterns from string values recursively."""
@@ -138,6 +154,48 @@ async def get_estado(
 
 
 @tool
+async def get_info_general(
+    poliza_id: Annotated[str, InjectedState("poliza_id")],
+) -> str:
+    """Consulta la información general de la póliza activa: estado, aseguradora,
+    riesgo asegurado (p. ej. la placa del vehículo), prima, vigencia, y si hay
+    datos de cartera, saldo pendiente y próximo compromiso de pago.
+
+    No requiere argumentos — la póliza viene del estado de la conversación.
+    """
+    client = get_softseguros_client()
+    raw = await client.get_poliza(poliza_id)
+    payload: dict[str, Any] = {
+        "numero_poliza": raw.get("numero_poliza"),
+        "estado_poliza_nombre": raw.get("estado_poliza_nombre"),
+        "ramo_nombre": raw.get("ramo_nombre"),
+        # "aseguradora" = compañía (PREVISORA, SURA...) — upstream field name
+        # is ramo_aseguradora_nombre on /api/poliza/.
+        "aseguradora": raw.get("ramo_aseguradora_nombre"),
+        # riesgo asegurado = objeto asegurado (placa en AUTOMÓVILES). El campo
+        # se llama codio_objeto_asegurado en /api/poliza/ y
+        # poliza_codio_objeto_asegurado en /api/pagopoliza/ (sic ambos).
+        "riesgo_asegurado": (
+            raw.get("codio_objeto_asegurado") or raw.get("poliza_codio_objeto_asegurado")
+        ),
+        "prima": raw.get("prima"),
+        "fecha_inicio": raw.get("fecha_inicio"),
+        "fecha_fin": raw.get("fecha_fin"),
+        "estado_cartera": raw.get("estado_cartera"),
+    }
+    # Cartera enrichment is best-effort — the fast pagos endpoint can be slow
+    # or empty for policies without payment rows.
+    try:
+        cs = await client.get_cartera_status(poliza_id)
+        if cs is not None:
+            payload["saldo_pendiente"] = cs.saldo_pendiente
+            payload["proximo_compromiso_pago"] = cs.fecha_realizara_pago
+    except Exception as exc:  # noqa: BLE001
+        log.warning("get_info_general.cartera_enrich_failed", error_type=type(exc).__name__)
+    return sanitize_tool_output(payload, INFO_GENERAL_ALLOWLIST)
+
+
+@tool
 async def get_coberturas(
     poliza_id: Annotated[str, InjectedState("poliza_id")],
 ) -> str:
@@ -175,10 +233,12 @@ async def escalate_to_human(reason: str) -> str:
 __all__ = [
     "COBERTURAS_NESTED_ALLOWLIST",
     "ESTADO_ALLOWLIST",
+    "INFO_GENERAL_ALLOWLIST",
     "SALDO_ALLOWLIST",
     "escalate_to_human",
     "get_coberturas",
     "get_estado",
+    "get_info_general",
     "get_saldo",
     "sanitize_tool_output",
 ]
