@@ -132,6 +132,16 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
         case_id=case_id,
         phone_hash=_hash_phone(body.phone),
     )
+
+    # Mirror a trace into Chatwoot so the DPG team sees the outreach (the
+    # template body lives in Meta, not here — a trace avoids copy drift).
+    from app.features.payment.nodes import mirror_outgoing_to_chatwoot
+
+    await mirror_outgoing_to_chatwoot(
+        body.phone,
+        f"[ARIA envió plantilla de seguimiento por llamada no contestada a "
+        f"{body.cliente_nombre} — botones: Sí, ayúdenme / Más tarde]",
+    )
     return {"case_id": case_id, "sent": True}
 
 
@@ -177,6 +187,14 @@ async def case_handoff(body: CaseHandoff, request: Request) -> dict[str, str | b
     if body.message:
         await meta.send_text(body.phone, body.message)
         sent = True
+
+        from app.features.payment.nodes import mirror_outgoing_to_chatwoot
+
+        await mirror_outgoing_to_chatwoot(body.phone, body.message)
+
+        from app.features.payment.nodes import mirror_outgoing_to_chatwoot
+
+        await mirror_outgoing_to_chatwoot(body.phone, body.message)
 
     audit_log.emit_task(
         action="handoff_received",

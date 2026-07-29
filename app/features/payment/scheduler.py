@@ -165,10 +165,14 @@ async def check_pending_cases(ctx: dict[str, Any]) -> dict[str, Any]:
                     ),
                     message_type="outgoing",
                 )
-                await meta.send_text(
-                    case.phone,
-                    "La revision esta tardando. Te conecto con un agente humano.",
-                )
+                client_notice = "La revision esta tardando. Te conecto con un agente humano."
+                await meta.send_text(case.phone, client_notice)
+                try:
+                    await chatwoot.post_message(conv_id, client_notice, message_type="outgoing")
+                except Exception as cw_exc:  # noqa: BLE001
+                    log.warning(
+                        "scheduler.escalate.mirror_failed", error_type=type(cw_exc).__name__
+                    )
                 await session.execute(
                     update(Case)
                     .where(Case.case_id == case.case_id)

@@ -160,12 +160,12 @@ async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> No
             phone_hash=_hash_phone(phone),
             wamid_in=wamid,
         )
-        # Replace with escalation substitute — no mirror of the blocked text.
+        # Replace with escalation substitute — no mirror of the blocked text
+        # (but the substitute the client actually received IS mirrored below).
+        substitute = "La revision requiere validacion adicional. Te conecto con un agente humano."
         try:
-            await app_state.meta.send_text(
-                to=phone,
-                body="La revision requiere validacion adicional. Te conecto con un agente humano.",
-            )
+            await app_state.meta.send_text(to=phone, body=substitute)
+            await _enqueue_mirror_outbound(app_state, phone, substitute, f"{wamid}:fw-sub")
         except Exception as exc:  # noqa: BLE001
             log.error("output_firewall.escalation_send_failed", error_type=type(exc).__name__)
         # Open Chatwoot and post private note with the block reason.
@@ -442,6 +442,20 @@ async def _peek_poliza_id(app_state: Any, thread_id: str) -> str | None:
         return None
 
 
+async def _enqueue_mirror_outbound(app_state: Any, phone: str, text: str, wamid: str) -> None:
+    """Enqueue a Chatwoot mirror for a direct bot send (fail-open).
+
+    Direct sends (searching ack, T_06, rate-limit notice, firewall substitute,
+    media ack) bypass ``_send_outbound`` and were invisible to the DPG team.
+    """
+    if not (hasattr(app_state, "arq") and app_state.arq is not None):
+        return
+    try:
+        await app_state.arq.enqueue_job("mirror_outbound", phone=phone, text=text, wamid=wamid)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("webhook.mirror_outbound.enqueue_failed", error_type=type(exc).__name__)
+
+
 async def _send_searching_ack(*, app_state: Any, thread_id: str, phone: str, meta: Any) -> None:
     """Send a brief 'searching' text when the thread is awaiting document input.
 
@@ -461,7 +475,9 @@ async def _send_searching_ack(*, app_state: Any, thread_id: str, phone: str, met
             channel_values.get("asked_for_doc")
             and channel_values.get("node") == "awaiting_identification"
         ):
-            await meta.send_text(to=phone, body="Buscando tu información, un momento... 🔍")
+            ack_text = "Buscando tu información, un momento... 🔍"
+            await meta.send_text(to=phone, body=ack_text)
+            await _enqueue_mirror_outbound(app_state, phone, ack_text, f"{thread_id}:searching")
     except Exception as exc:  # noqa: BLE001
         log.warning("webhook.searching_ack.failed", error_type=type(exc).__name__)
 
@@ -483,6 +499,7 @@ async def _handle_text_message(
         )
         try:
             await meta.send_text(to=msg.from_, body=T_06)
+            await _enqueue_mirror_outbound(request.app.state, msg.from_, T_06, f"{msg.id}:t06")
         except Exception as exc:  # noqa: BLE001
             log.error("webhook.firewall.send_t06.failed", error_type=type(exc).__name__)
         return
@@ -693,6 +710,9 @@ async def _dispatch_message(  # noqa: C901
         )
         try:
             await meta.send_text(to=msg.from_, body=T_RATE_LIMITED)
+            await _enqueue_mirror_outbound(
+                request.app.state, msg.from_, T_RATE_LIMITED, f"{msg.id}:rl"
+            )
         except Exception as exc:  # noqa: BLE001
             log.error("webhook.rate_limited.send_failed", error_type=type(exc).__name__)
         return
@@ -725,8 +745,15 @@ async def _dispatch_message(  # noqa: C901
         return
 
     if msg.type in {"audio", "sticker", "video", "voice", "location"}:
+        # Client-facing copy (the F3-era "echo: [audio] received" dev text was
+        # still live in production) + mirror both directions to Chatwoot.
+        unsupported_reply = (
+            "Recibimos tu archivo, pero por este canal solo podemos procesar "
+            "imágenes o PDF (por ejemplo, comprobantes de pago). Si necesitas "
+            "ayuda, escríbenos tu consulta."
+        )
         try:
-            wamid = await meta.send_media_ack(to=msg.from_, media_type=msg.type)
+            wamid = await meta.send_text(to=msg.from_, body=unsupported_reply)
         except Exception as exc:  # noqa: BLE001
             log.exception(
                 "webhook.echo.error",
@@ -736,6 +763,18 @@ async def _dispatch_message(  # noqa: C901
                 result="error",
             )
             return
+        app_state = request.app.state
+        if hasattr(app_state, "arq") and app_state.arq is not None:
+            try:
+                await app_state.arq.enqueue_job(
+                    "mirror_inbound",
+                    phone=msg.from_,
+                    text=f"[cliente envió {msg.type} — tipo no procesable]",
+                    wamid=msg.id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("webhook.media.mirror_inbound.failed", error_type=type(exc).__name__)
+        await _enqueue_mirror_outbound(app_state, msg.from_, unsupported_reply, f"{msg.id}:out")
         log.info(
             "webhook.echo.media.sent",
             message_id=msg.id,

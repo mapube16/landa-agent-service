@@ -305,11 +305,12 @@ class TestCheckPendingCases:
 
         assert result == {"processed": 1}
         chatwoot.get_or_create_conversation.assert_awaited_once()
-        chatwoot.post_message.assert_awaited_once()
+        # Two posts: internal escalation note + mirror of the client-facing text.
+        assert chatwoot.post_message.await_count == 2
         meta.send_text.assert_awaited_once()
 
-        # Verify escalation message contains case_id
-        escalation_args = chatwoot.post_message.call_args
+        # Verify the escalation note contains case_id
+        escalation_args = chatwoot.post_message.call_args_list[0]
         assert case_id in str(escalation_args)
 
     @pytest.mark.asyncio

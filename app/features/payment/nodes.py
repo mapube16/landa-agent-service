@@ -359,6 +359,14 @@ async def forward_case_to_cartera(
     await session.flush()
 
     log.info("payment.forward.ok", case_id=case_id, total=total, wamid=last_wamid)
+
+    # Team-visible trace in the client's Chatwoot conversation (fail-open).
+    await mirror_outgoing_to_chatwoot(
+        case.phone,
+        f"[{total} comprobante(s) del caso #{case_id} reenviado(s) a cartera "
+        f"para validación — esperando Aprobar/Rechazar]",
+    )
+
     return {
         "payment_status": "awaiting_cartera",
         "cartera_message_wamid": last_wamid,
