@@ -140,6 +140,60 @@ class TestNodeReceiveComprobante:
         assert result["attachment_count"] >= 1
 
     @pytest.mark.asyncio
+    async def test_receive_mirrors_image_to_chatwoot(
+        self,
+        mock_meta: AsyncMock,
+        mock_chatwoot: AsyncMock,
+        mock_session: AsyncMock,
+        mock_session_factory: Any,
+        tmp_path: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The stored comprobante file is posted to Chatwoot as an attachment."""
+        from app.config.settings import settings
+
+        monkeypatch.setattr(settings.payment, "volume_path", tmp_path)
+
+        import app.features.payment.nodes as nodes_mod
+
+        monkeypatch.setattr(nodes_mod, "_get_meta", lambda: mock_meta)
+        monkeypatch.setattr(nodes_mod, "_get_chatwoot", lambda: mock_chatwoot)
+        monkeypatch.setattr(nodes_mod, "_session_factory_fn", mock_session_factory)
+
+        await nodes_mod.node_receive_comprobante(_make_state())
+
+        mock_chatwoot.post_attachment.assert_awaited_once()
+        kwargs = mock_chatwoot.post_attachment.call_args.kwargs
+        assert kwargs["message_type"] == "incoming"
+        assert kwargs["mime_type"] == "image/jpeg"
+
+    @pytest.mark.asyncio
+    async def test_receive_chatwoot_mirror_failure_is_fail_open(
+        self,
+        mock_meta: AsyncMock,
+        mock_chatwoot: AsyncMock,
+        mock_session: AsyncMock,
+        mock_session_factory: Any,
+        tmp_path: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A Chatwoot outage must not break comprobante intake."""
+        from app.config.settings import settings
+
+        monkeypatch.setattr(settings.payment, "volume_path", tmp_path)
+
+        import app.features.payment.nodes as nodes_mod
+
+        mock_chatwoot.post_attachment.side_effect = RuntimeError("chatwoot down")
+        monkeypatch.setattr(nodes_mod, "_get_meta", lambda: mock_meta)
+        monkeypatch.setattr(nodes_mod, "_get_chatwoot", lambda: mock_chatwoot)
+        monkeypatch.setattr(nodes_mod, "_session_factory_fn", mock_session_factory)
+
+        result = await nodes_mod.node_receive_comprobante(_make_state())
+
+        assert result["payment_status"] == "forwarded"
+
+    @pytest.mark.asyncio
     async def test_receive_reuses_open_case(
         self,
         mock_meta: AsyncMock,

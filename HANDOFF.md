@@ -42,6 +42,46 @@ Fuente de verdad detallada (LEER estos 5 antes de tocar nada):
 
 ## 2. Ruta pendiente (qué sigue, en orden)
 
+### A0. Sesión 2026-07-29 madrugada — smoke de pago EN CURSO + 2 gaps de espejo Chatwoot
+
+**Smoke del flujo de pago (criterios 1 y 2, en vivo, número nuevo):** intake
+validado a las 05:30 UTC — foto del cliente (+573123528153) → descarga CDN →
+case `3f29ca67` → attachment guardado → ack recibido en el teléfono →
+`payment.forward.deferred` con `due_at=13:20Z` (8:20 AM Bogotá). **Paso
+siguiente (mañana 8:20-9:00):** verificar que el forward diferido dispare,
+cartera (317...) reciba imagen+botones, tap "Aprobar" → confirmación al
+cliente. Luego repetir con "Rechazar" → escalación Chatwoot (criterio 2).
+Bug REAL encontrado y arreglado esta sesión (`ac5923f`): `process_attachment`
+usaba `aupdate_state + ainvoke(None)` (semántica de resume) — en un thread con
+run previo completado o suspendido en `interrupt()` no ejecutaba NINGÚN nodo y
+el comprobante se perdía en silencio. Ahora pasa los values como input de
+`ainvoke` (run nuevo desde START). También arreglado el loop espejo→relay que
+duplicaba cada respuesta del bot (`cf9dd7f`, marca `content_attributes.bot_mirror`).
+
+**2 gaps de espejo Chatwoot (observabilidad, NO bloquean al cliente — arreglar
+juntos después del smoke):**
+1. La imagen del comprobante no se sube a Chatwoot — el mirror solo postea el
+   placeholder `[comprobante recibido: image/jpeg]`. Falta subir el archivo
+   (ya está en el volumen) vía multipart al crear el mensaje en Chatwoot.
+2. Los envíos directos de los nodos de pago (ack de comprobante, confirmación
+   post-aprobación, escalación) NO se espejan a Chatwoot — los nodos envían
+   por MetaCloudClient directo (decisión 04-04) sin pasar por el dispatcher
+   del webhook que sí espeja. El equipo DPG no ve esas respuestas del bot.
+
+**Cuentas Chatwoot equipo DPG:** creadas 2026-07-29 (ids 2-6, rol agent,
+miembros del inbox 2): administracion@, auxiliar.cartera@, gerencia@,
+proyectos@ (dpgseguros.com) + innovaciondpg@gmail.com. Invitaciones enviadas
+por Chatwoot automáticamente. Falta que el operador les mande el correo
+explicativo (borrador entregado en la sesión).
+
+**Template `voice_no_answer_followup`:** recreado en la WABA nueva
+(2512777435825462, id template 1566438371941546) — la WABA vieja tenía el
+aprobado y la nueva estaba VACÍA (causa del 404 en el handoff). Copy corregido
+al del informe nuevo (`INFORME TÉCNICO BOT COBRANZA.docx` §7 Mensaje 1, con
+`{{1}}`=nombre y teléfono de cartera) — APPROVED 2026-07-29. El código ya
+manda `body_params=[cliente_nombre]` (`141bc27`). OJO: el copy de D-20 en
+04-CONTEXT.md quedó desactualizado (era del informe "CON CORRECCIONES" viejo).
+
 ### A. Fase 6 — integración con el voice agent (lambda-proyect) — AMBOS LADOS CONSTRUIDOS
 Contrato: `.planning/contracts/lambda-handoff-contract.md`.
 

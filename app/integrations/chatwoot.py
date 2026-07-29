@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import asyncio
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
+import anyio
 import httpx
 import structlog
 
@@ -86,6 +88,39 @@ class ChatwootClient:
             conv_id=conversation_id,
             msg_type=message_type,
             content_len=len(content),
+        )
+
+    async def post_attachment(
+        self,
+        conversation_id: int,
+        *,
+        file_path: Path,
+        mime_type: str,
+        content: str = "",
+        message_type: Literal["incoming", "outgoing"] = "incoming",
+    ) -> None:
+        """POST a message with a file attachment (multipart) to a conversation.
+
+        Used to mirror the actual comprobante image into Chatwoot so the DPG
+        team sees the file, not just a text placeholder. Multipart form (not
+        JSON) — Chatwoot only accepts ``attachments[]`` via form uploads, so
+        the ``bot_mirror`` marker cannot ride in ``content_attributes`` here;
+        loop prevention still holds because the relay only acts on
+        ``outgoing`` + human-sender messages and mirrors post ``incoming``.
+        """
+        path = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/messages"
+        data = await anyio.Path(file_path).read_bytes()
+        r = await self._http.post(
+            path,
+            data={"message_type": message_type, "content": content},
+            files={"attachments[]": (file_path.name, data, mime_type)},
+        )
+        r.raise_for_status()
+        log.info(
+            "chatwoot.post_attachment.ok",
+            conv_id=conversation_id,
+            msg_type=message_type,
+            size_bytes=len(data),
         )
 
     async def get_or_create_conversation(self, phone: str) -> int:

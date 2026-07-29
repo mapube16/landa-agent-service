@@ -191,6 +191,10 @@ async def _dispatch_client_message(
         return
     log.info("cartera.dispatch.sent", case_id=case_id, payment_approved=payment_approved)
 
+    from app.features.payment.nodes import mirror_outgoing_to_chatwoot
+
+    await mirror_outgoing_to_chatwoot(phone, text)
+
 
 # ---------------------------------------------------------------------------
 # handle_cartera_message

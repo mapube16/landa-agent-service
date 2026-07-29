@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -54,6 +55,22 @@ def _get_chatwoot() -> Any:
     from app.integrations.chatwoot import get_chatwoot_client
 
     return get_chatwoot_client()
+
+
+async def mirror_outgoing_to_chatwoot(phone: str, text: str) -> None:
+    """Mirror a client-facing bot send into the Chatwoot conversation.
+
+    Payment nodes send via MetaCloudClient directly (they run inside the ARQ
+    graph invocation, outside the webhook dispatcher that normally mirrors) —
+    without this the DPG team never sees the bot's payment replies in Chatwoot.
+    Fail-open: a Chatwoot outage must never block a client-facing send.
+    """
+    try:
+        chatwoot = _get_chatwoot()
+        conv_id = await chatwoot.get_or_create_conversation(phone)
+        await chatwoot.post_message(conv_id, text, message_type="outgoing")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("payment.mirror_outgoing.failed", error_type=type(exc).__name__)
 
 
 def _session_factory_fn() -> Any:
@@ -192,6 +209,25 @@ async def node_receive_comprobante(state: dict[str, Any]) -> dict[str, Any]:
             await session.flush()
 
         log.info("payment.receive.ok", case_id=case_id, count=new_count)
+
+        # Mirror the actual image into Chatwoot so the DPG team sees the file
+        # (the webhook mirror only posts a text placeholder). Fail-open.
+        try:
+            chatwoot = _get_chatwoot()
+            conv_id = await chatwoot.get_or_create_conversation(phone)
+            await chatwoot.post_attachment(
+                conv_id,
+                file_path=Path(path),
+                mime_type=declared_mime,
+                message_type="incoming",
+            )
+        except Exception as cw_exc:  # noqa: BLE001
+            log.warning(
+                "payment.receive.chatwoot_mirror_failed",
+                case_id=case_id,
+                error_type=type(cw_exc).__name__,
+            )
+
         return {
             "case_id": case_id,
             "attachment_count": new_count,
@@ -209,6 +245,7 @@ async def node_receive_comprobante(state: dict[str, Any]) -> dict[str, Any]:
 
         log.warning("payment.receive.rejected", reason=err, phone_hash=phone[:6])
         await meta.send_text(phone, msg)
+        await mirror_outgoing_to_chatwoot(phone, msg)
         return {"payment_status": "awaiting_receipt"}
 
 
@@ -365,6 +402,7 @@ async def node_forward_to_cartera(state: dict[str, Any]) -> dict[str, Any]:
             "(L-V 8-12 + 14-16). Te confirmamos cuando este validado."
         )
         await meta.send_text(phone, ack)
+        await mirror_outgoing_to_chatwoot(phone, ack)
 
         # Compute defer time (next window + 20 min buffer)
         next_window = next_business_window_after(now)
@@ -472,6 +510,7 @@ async def node_awaiting_cartera(state: dict[str, Any]) -> dict[str, Any]:
     if action == "info" and extra:
         meta = _get_meta()
         await meta.send_text(phone, extra)
+        await mirror_outgoing_to_chatwoot(phone, extra)
 
     return {"payment_status": "awaiting_cartera"}
 

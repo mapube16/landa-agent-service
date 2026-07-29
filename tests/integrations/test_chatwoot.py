@@ -87,6 +87,26 @@ async def test_post_message_incoming_calls_correct_path(
 
 
 @pytest.mark.asyncio
+async def test_post_attachment_sends_multipart(
+    chatwoot_client: Any, stub_http: MagicMock, tmp_path: Any
+) -> None:
+    stub_http.post.return_value = _make_response(200, {})
+    f = tmp_path / "comprobante.jpg"
+    f.write_bytes(b"\xff\xd8\xff\xe0fakejpeg")
+
+    await chatwoot_client.post_attachment(42, file_path=f, mime_type="image/jpeg")
+
+    stub_http.post.assert_awaited_once()
+    call_args = stub_http.post.call_args
+    assert "/conversations/42/messages" in call_args[0][0]
+    assert call_args[1]["data"]["message_type"] == "incoming"
+    name, blob, mime = call_args[1]["files"]["attachments[]"]
+    assert name == "comprobante.jpg"
+    assert blob.startswith(b"\xff\xd8\xff\xe0")
+    assert mime == "image/jpeg"
+
+
+@pytest.mark.asyncio
 async def test_post_message_outgoing_works(chatwoot_client: Any, stub_http: MagicMock) -> None:
     stub_http.post.return_value = _make_response(200, {})
 
