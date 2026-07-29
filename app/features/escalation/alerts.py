@@ -77,7 +77,19 @@ async def notify_team_escalation(
     )
 
     try:
-        await meta.send_text(to=cartera_list[0], body=body)
+        # Plantilla UTILITY aprobada → entrega SIEMPRE, con o sin ventana de
+        # 24h abierta con cartera (el texto libre solo llega con ventana
+        # abierta — hueco observado 29-jul). Mientras la plantilla esté
+        # pendiente de aprobación, el envío falla y cae al texto libre.
+        try:
+            await meta.send_template(
+                cartera_list[0],
+                "alerta_atencion_humana",
+                "es",
+                body_params=[quien, motivo],
+            )
+        except Exception:  # noqa: BLE001
+            await meta.send_text(to=cartera_list[0], body=body)
         log.info(
             "escalation_alert.sent",
             phone_tail=phone_norm[-4:],
