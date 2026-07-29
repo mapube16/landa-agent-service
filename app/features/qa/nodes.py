@@ -30,7 +30,7 @@ import structlog
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.features.qa.knowledge_base import load_kb
-from app.features.qa.messages import T_01, T_02, T_03, T_06, T_07, T_08
+from app.features.qa.messages import ESCAPE_REGEX, T_01, T_02, T_03, T_06, T_07, T_08
 from app.features.qa.prompts import system_prompt
 from app.features.qa.state import QAState
 from app.features.qa.tools import (
@@ -56,6 +56,13 @@ _EMOJI_NUMS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣",
 _LIST_PAGE_SIZE = 9  # 9 polizas + 1 "Ver más" row = 10 total (Meta limit)
 _MORE_BUTTON_ID = "__more"
 _QA_BUTTON_IDS = {"saldo", "estado", "coberturas", "info_general", "agente"}
+
+# Client can't find / doesn't recognize their policy in the list → escalate
+# instead of re-listing forever (bug conv #68).
+_NO_RECONOCE_RE = re.compile(
+    r"no\s+(veo|encuentro|reconozco|s[eé]|aparece)|ninguna|no\s+es\s+esa|cu[aá]l\s+p[oó]liza",
+    re.IGNORECASE,
+)
 
 
 def _session_factory_fn() -> Any:
@@ -185,10 +192,11 @@ def _polizas_list_message(polizas: list[dict[str, Any]], page: int) -> AIMessage
         ramo = p.get("ramo_nombre", p.get("ramo", ""))
         estado = p.get("estado_poliza_nombre", p.get("estado", ""))
         # Informe §5 + pedido del cliente 29-jul: el TÍTULO de cada fila es el
-        # riesgo asegurado (la placa, el inmueble...) — mucho más reconocible
-        # para el cliente que el número de póliza, que baja a la descripción.
+        # riesgo asegurado (placa, inmueble...) cuando existe — más reconocible
+        # que el número. Cuando no hay riesgo real (PYME/contratos traen "1"),
+        # el título es ramo + número, NUNCA vacío ni "1" (bug conv #68).
         riesgo = _riesgo_of(p)
-        title = (riesgo or ramo or f"POL-{numero}")[:24]
+        title = (riesgo or f"{ramo} POL-{numero}".strip() or f"POL-{numero}")[:24]
         desc_parts = [x for x in (f"POL-{numero}", ramo, estado) if x]
         desc = " · ".join(desc_parts)[:72] if desc_parts else None
         rows.append((pid, title, desc))
@@ -420,8 +428,20 @@ _POLIZA_RE = re.compile(r"\b(POL-?\d+|\d{5,8})\b", re.IGNORECASE)
 
 
 def _riesgo_of(p: dict[str, Any]) -> str:
-    """Insured-object label (placa etc.) — field name differs per endpoint."""
-    return str(p.get("codio_objeto_asegurado") or p.get("poliza_codio_objeto_asegurado") or "")
+    """Insured-object label (placa etc.) — field name differs per endpoint.
+
+    Returns "" when the value is a placeholder, NOT a real insured object.
+    ``codio_objeto_asegurado`` carries the plate for AUTOMÓVILES (``ZVL663``)
+    but a bare internal code like ``"1"`` / ``"0"`` for PYME/contract ramos
+    (confirmed live 2026-07-29 — those rendered lists as "1, 1, 1..."). A
+    real risk label is ≥3 chars and not purely a short digit run.
+    """
+    raw = str(
+        p.get("codio_objeto_asegurado") or p.get("poliza_codio_objeto_asegurado") or ""
+    ).strip()
+    if len(raw) < 3 or (raw.isdigit() and len(raw) < 4):
+        return ""
+    return raw
 
 
 def _resolve_by_riesgo(text: str, polizas: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -496,6 +516,17 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:  # noqa: C901
             "messages": [_polizas_list_message(polizas, page=next_page)],
         }
 
+    # 0. Explicit "no reconozco mi póliza" / human request → escalate instead of
+    #    re-listing forever (bug conv #68: client said "No veo la póliza que
+    #    mencionan" and the bot looped the same list). ESCAPE_REGEX also covers
+    #    "agente/humano/asesor".
+    if ESCAPE_REGEX.search(text) or _NO_RECONOCE_RE.search(text):
+        return {
+            "node": "escalating",
+            "escalation_reason": "policy_choice_unresolved",
+            "messages": [AIMessage(content=T_08)],
+        }
+
     resolved: dict[str, Any] | None = None
 
     # 2. Interactive list tap — text == poliza_id (matches row id we sent)
@@ -526,10 +557,19 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:  # noqa: C901
         resolved = await _resolve_by_llm_fallback(text, polizas)
 
     if resolved is None:
-        # Stay in awaiting_policy_choice — re-prompt with the same list
+        # After 2 failed selection attempts, stop re-listing and offer a human
+        # (bug conv #68: infinite re-list loop). Below the threshold, re-prompt.
+        retries = state.get("choice_retries", 0) + 1
+        if retries >= 2:
+            return {
+                "node": "escalating",
+                "escalation_reason": "policy_choice_unresolved",
+                "messages": [AIMessage(content=T_08)],
+            }
         page = state.get("polizas_page", 0)
         return {
             "node": "awaiting_policy_choice",
+            "choice_retries": retries,
             "messages": [_polizas_list_message(polizas, page=page)],
         }
 
@@ -543,13 +583,16 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:  # noqa: C901
 
 
 def route_from_policy_choice(state: QAState) -> str:
-    """Conditional edge after node_choose_policy — always end the turn.
+    """Conditional edge after node_choose_policy.
 
-    Whether the choice resolved (poliza locked, confirmation emitted) or
-    didn't (re-prompt emitted), the next step needs the user's reply.
+    Escalates to the escalation node when selection stays unresolved (client
+    asked for a human / didn't recognize the policy / exhausted retries);
+    otherwise ends the turn (poliza locked or re-prompt emitted).
     """
     from langgraph.graph import END
 
+    if state.get("node") == "escalating":
+        return "escalating"
     return END
 
 

@@ -413,6 +413,36 @@ class ChatwootClient:
         r.raise_for_status()
         log.info("chatwoot.conv.resolved", conv_id=conversation_id)
 
+    async def list_conversations(self, *, since_epoch: float | None = None) -> list[dict[str, Any]]:
+        """Return all conversations (status=all), newest activity first.
+
+        Used by the daily audit. ``since_epoch`` filters client-side to
+        conversations with activity at/after the cutoff — the audit only
+        cares about the reporting window.
+        """
+        path = f"/api/v1/accounts/{self._account_id}/conversations"
+        r = await self._http.get(path, params={"status": "all", "sort_by": "last_activity_at_desc"})
+        r.raise_for_status()
+        payload: list[dict[str, Any]] = r.json().get("data", {}).get("payload", [])
+        if since_epoch is not None:
+            payload = [c for c in payload if (c.get("last_activity_at") or 0) >= since_epoch]
+        return payload
+
+    async def list_messages(self, conversation_id: int) -> list[dict[str, Any]]:
+        """Return the messages of a conversation (oldest first), for auditing."""
+        path = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/messages"
+        r = await self._http.get(path)
+        r.raise_for_status()
+        msgs: list[dict[str, Any]] = r.json().get("payload", [])
+        return msgs
+
+    async def add_label(self, conversation_id: int, labels: list[str]) -> None:
+        """Set the conversation's labels (Chatwoot replaces the full set)."""
+        path = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/labels"
+        r = await self._http.post(path, json={"labels": labels})
+        r.raise_for_status()
+        log.info("chatwoot.labels.set", conv_id=conversation_id, n=len(labels))
+
 
 @lru_cache(maxsize=1)
 def get_chatwoot_client() -> ChatwootClient:

@@ -134,7 +134,7 @@ def build_qa_graph() -> StateGraph:  # type: ignore[type-arg]
     builder.add_conditional_edges(
         "awaiting_policy_choice",
         route_from_policy_choice,
-        {END: END},
+        {"escalating": "escalating", END: END},
     )
     builder.add_conditional_edges(
         "answering_qa",

@@ -206,7 +206,56 @@ async def test_node_choose_policy_invalid_input_stays() -> None:
     with patch("app.features.qa.nodes.get_llm", return_value=mock_llm):
         result = await node_choose_policy(state)  # type: ignore[arg-type]
 
+    # First failed attempt re-lists (choice_retries -> 1), doesn't escalate yet.
     assert result["node"] == "awaiting_policy_choice"
+    assert result["choice_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_node_choose_policy_no_reconoce_escalates() -> None:
+    """'No veo la póliza que mencionan' escalates instead of re-listing (conv #68)."""
+    from app.features.qa.nodes import node_choose_policy
+
+    polizas = [{"id": "A", "numero_poliza": "11111"}, {"id": "B", "numero_poliza": "22222"}]
+    state = _make_state(
+        messages=[HumanMessage(content="No veo la póliza que mencionan")],
+        polizas_list=polizas,
+        node="awaiting_policy_choice",
+    )
+    result = await node_choose_policy(state)  # type: ignore[arg-type]
+    assert result["node"] == "escalating"
+    assert result["escalation_reason"] == "policy_choice_unresolved"
+
+
+@pytest.mark.asyncio
+async def test_node_choose_policy_escalates_after_two_retries() -> None:
+    """Second unresolved attempt escalates instead of looping the list."""
+    from app.features.qa.nodes import node_choose_policy
+
+    polizas = [{"id": "A", "numero_poliza": "11111"}, {"id": "B", "numero_poliza": "22222"}]
+    state = _make_state(
+        messages=[HumanMessage(content="zzz")],
+        polizas_list=polizas,
+        node="awaiting_policy_choice",
+    )
+    state["choice_retries"] = 1  # one prior failed attempt
+
+    mock_llm = MagicMock()
+    mock_llm.ainvoke = AsyncMock(return_value=MagicMock(content="NONE"))
+    with patch("app.features.qa.nodes.get_llm", return_value=mock_llm):
+        result = await node_choose_policy(state)  # type: ignore[arg-type]
+
+    assert result["node"] == "escalating"
+
+
+def test_riesgo_of_rejects_placeholder_codes() -> None:
+    """PYME/contract policies carry '1'/'0' as codio — not a real risk label."""
+    from app.features.qa.nodes import _riesgo_of
+
+    assert _riesgo_of({"codio_objeto_asegurado": "ZVL663"}) == "ZVL663"
+    assert _riesgo_of({"codio_objeto_asegurado": "1"}) == ""
+    assert _riesgo_of({"codio_objeto_asegurado": "0"}) == ""
+    assert _riesgo_of({"codio_objeto_asegurado": ""}) == ""
 
 
 # ---------------------------------------------------------------------------
