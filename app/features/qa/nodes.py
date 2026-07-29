@@ -128,9 +128,10 @@ def _build_policy_list(polizas: list[dict[str, Any]]) -> str:
         numero = p.get("numero_poliza", p.get("id", "?"))
         ramo = p.get("ramo_nombre", p.get("ramo", ""))
         estado = p.get("estado_poliza_nombre", p.get("estado", ""))
-        riesgo = p.get("codio_objeto_asegurado") or p.get("poliza_codio_objeto_asegurado") or ""
-        detail = ", ".join(x for x in (ramo, riesgo, estado) if x)
-        lines.append(f"{emoji} POL-{numero} ({detail})")
+        riesgo = _riesgo_of(p)
+        lead = riesgo or f"POL-{numero}"
+        detail = ", ".join(x for x in (f"POL-{numero}" if riesgo else "", ramo, estado) if x)
+        lines.append(f"{emoji} {lead} ({detail})")
     return "\n".join(lines)
 
 
@@ -153,12 +154,12 @@ def _polizas_list_message(polizas: list[dict[str, Any]], page: int) -> AIMessage
         numero = p.get("numero_poliza", pid)
         ramo = p.get("ramo_nombre", p.get("ramo", ""))
         estado = p.get("estado_poliza_nombre", p.get("estado", ""))
-        # Informe §5: the list must show ramo + riesgo asegurado + numero.
-        # "riesgo" = upstream field poliza_codio_objeto_asegurado (sic) — the
-        # insured object (e.g. the plate for AUTOMÓVILES).
-        riesgo = p.get("codio_objeto_asegurado") or p.get("poliza_codio_objeto_asegurado") or ""
-        title = f"POL-{numero}"[:24]
-        desc_parts = [x for x in (ramo, riesgo, estado) if x]
+        # Informe §5 + pedido del cliente 29-jul: el TÍTULO de cada fila es el
+        # riesgo asegurado (la placa, el inmueble...) — mucho más reconocible
+        # para el cliente que el número de póliza, que baja a la descripción.
+        riesgo = _riesgo_of(p)
+        title = (riesgo or ramo or f"POL-{numero}")[:24]
+        desc_parts = [x for x in (f"POL-{numero}", ramo, estado) if x]
         desc = " · ".join(desc_parts)[:72] if desc_parts else None
         rows.append((pid, title, desc))
     if has_more:
@@ -370,6 +371,24 @@ _NUMERIC_RE = re.compile(r"^\s*([1-9]\d*)\s*$")
 _POLIZA_RE = re.compile(r"\b(POL-?\d+|\d{5,8})\b", re.IGNORECASE)
 
 
+def _riesgo_of(p: dict[str, Any]) -> str:
+    """Insured-object label (placa etc.) — field name differs per endpoint."""
+    return str(p.get("codio_objeto_asegurado") or p.get("poliza_codio_objeto_asegurado") or "")
+
+
+def _resolve_by_riesgo(text: str, polizas: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Match typed text against the riesgo asegurado (clients type the plate
+    they see as the list title, e.g. 'ZVL663')."""
+    needle = text.strip().upper()
+    if not needle:
+        return None
+    for p in polizas:
+        riesgo = _riesgo_of(p).upper()
+        if riesgo and (riesgo == needle or riesgo in needle):
+            return p
+    return None
+
+
 def _resolve_by_number_pattern(text: str, polizas: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Layer 2: match poliza number pattern in text."""
     m2 = _POLIZA_RE.search(text)
@@ -387,7 +406,9 @@ async def _resolve_by_llm_fallback(
     text: str, polizas: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
     """Layer 3: LLM fallback with allowlist — only when layers 1+2 fail."""
-    allowlist_nums = [str(p.get("numero_poliza", "")) for p in polizas]
+    allowlist_nums = [
+        f"{p.get('numero_poliza', '')} (riesgo: {_riesgo_of(p) or 'N/A'})" for p in polizas
+    ]
     try:
         llm = get_llm("intent")
         fallback_prompt = (
@@ -405,7 +426,7 @@ async def _resolve_by_llm_fallback(
     return None
 
 
-async def node_choose_policy(state: QAState) -> dict[str, Any]:
+async def node_choose_policy(state: QAState) -> dict[str, Any]:  # noqa: C901
     """Parse client's policy choice (interactive tap, numeric, or text) and lock poliza_id.
 
     Resolution order:
@@ -447,6 +468,10 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:
     # 4. POL-XXXX pattern
     if resolved is None:
         resolved = _resolve_by_number_pattern(text, polizas)
+
+    # 4b. Riesgo asegurado match (clients type the plate they see as title)
+    if resolved is None:
+        resolved = _resolve_by_riesgo(text, polizas)
 
     # 5. LLM fallback
     if resolved is None:
