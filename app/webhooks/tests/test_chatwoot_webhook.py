@@ -130,6 +130,20 @@ async def test_ignores_agent_bot(
     meta.send_text.assert_not_called()
 
 
+async def test_private_note_never_relays(
+    client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
+) -> None:
+    """Private notes (outgoing + private=true) must NEVER reach the client."""
+    meta, _, _ = mocks
+    body = _payload(private=True)
+    r = await client.post(
+        "/webhooks/chatwoot", content=body, headers={"X-Chatwoot-Signature": _sign(body)}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ignored": "private_note"}
+    meta.send_text.assert_not_called()
+
+
 async def test_relay_mutes_bot(
     client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
 ) -> None:

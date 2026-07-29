@@ -143,6 +143,10 @@ def _filter_reason(payload: dict[str, Any]) -> str | None:
         return "event"
     if payload.get("message_type") != "outgoing":
         return "message_type"
+    # Private notes are outgoing + private=true — they must NEVER reach the
+    # client (found live 2026-07-29: internal notes were relayed to WhatsApp).
+    if payload.get("private"):
+        return "private_note"
     if (payload.get("sender") or {}).get("type") != "user":
         return "sender_type"
     if (payload.get("content_attributes") or {}).get("bot_mirror"):

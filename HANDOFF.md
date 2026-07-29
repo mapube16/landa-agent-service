@@ -96,6 +96,51 @@ al del informe nuevo (`INFORME TÉCNICO BOT COBRANZA.docx` §7 Mensaje 1, con
 manda `body_params=[cliente_nombre]` (`141bc27`). OJO: el copy de D-20 en
 04-CONTEXT.md quedó desactualizado (era del informe "CON CORRECCIONES" viejo).
 
+### A0-bis. Sesión 2026-07-29 mañana — LANZAMIENTO A PRODUCCIÓN REAL
+
+**Smoke de pago CERRADO end-to-end en vivo**: foto → intake → forward diferido
+(8:51 AM tras 2 fixes) → botones a cartera → Aprobar → confirmación al cliente. ✅
+
+**Bugs REALES encontrados y arreglados en vivo (todos desplegados por `railway
+up`; ver commits locales):**
+1. Scheduler `check_pending_cases`: `KeyError: 'meta'` — asumía ctx keys que el
+   worker nunca inyectó; primera ejecución en horario hábil de la historia.
+   Fix: fallback a singletons (`_get_meta`/`_get_chatwoot`/`_get_session_factory`).
+2. Scheduler: `MissingGreenlet` — lazy-load de `case.attachments` en async.
+   Fix: `selectinload(Case.attachments)` en la query.
+3. Relay de adjuntos agente→cliente: 2 bugs apilados — `FRONTEND_URL` de
+   Chatwoot seguía en el dominio Railway viejo (validación foreign_host
+   rechazaba), y `download_attachment` no seguía el 302 de ActiveStorage
+   (subía cuerpo vacío a Meta). Fix: var corregida + `follow_redirects=True`.
+4. **Notas privadas se filtraban al cliente por WhatsApp** (leak de privacidad):
+   el filtro del relay no miraba `private: true`. Fix: filtro `private_note`.
+
+**Config de producción aplicada:**
+- `CARTERA_PHONE_ALLOWLIST=+573146316003` (cartera REAL — Paloma/María Victoria).
+  El 317 de prueba ya no rutea como cartera.
+- `CHATWOOT_DEFAULT_ASSIGNEE_ID` ELIMINADA (web+worker): conversaciones nacen
+  SIN ASIGNAR (cola compartida de equipo). Conversaciones de prueba #10/#11
+  borradas + caché Redis `chatwoot:conv:*`/`chatwoot:phone_by_conv:*` flusheado
+  (obligatorio al borrar conversaciones — si no, el espejo apunta a convs muertas).
+- Chatwoot actualizado a 4.16.2. OJO: la página de "token inválido" de Devise
+  está ROTA en esta versión (500 por `omniauth_authorize_path`) — cualquier
+  link de confirmación/reset usado dos veces muestra 500 (cosmético).
+
+**Chatwoot equipo DPG — operativo:** SMTP NO FUNCIONA en Railway Hobby (bloquea
+puertos 25/465/587; solo plan Pro). Workaround estándar establecido: crear
+usuario por API → el token de confirmación/reset queda visible en los logs del
+mailer muerto (`railway logs -s Chatwoot`, grep `gid://chatwoot/User/N`) →
+confirmar cuenta server-side con curl al link + PUT /auth/password con el
+reset token para poner contraseña temporal. Las 5 cuentas activas (rol agent,
+miembros del inbox 2), contraseñas temporales entregadas al operador (marcar
+para rotación). Vars SMTP de PrivateEmail quedaron configuradas en el servicio
+Chatwoot (inertes por el bloqueo; funcionarían tal cual al subir a Pro).
+
+**Pendiente inmediato:** `git push` (Credential Manager pide re-auth gráfica —
+correr manualmente), rotación de credenciales (lista larga: WA_TOKEN,
+CHATWOOT_API_KEY, OPENROUTER, SoftSeguros, LangSmith, PrivateEmail
+(teamtech), tokens del puente F6, contraseñas temporales del equipo DPG).
+
 ### A. Fase 6 — integración con el voice agent (lambda-proyect) — AMBOS LADOS CONSTRUIDOS
 Contrato: `.planning/contracts/lambda-handoff-contract.md`.
 

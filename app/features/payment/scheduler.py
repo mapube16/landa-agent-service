@@ -30,6 +30,7 @@ from typing import Any
 import anyio
 import structlog
 from sqlalchemy import delete, select, update
+from sqlalchemy.orm import selectinload
 
 from app.features.payment.business_hours import (
     TZ_CO,
@@ -55,6 +56,27 @@ def _get_settings_payment() -> Any:
     from app.config.settings import settings
 
     return settings.payment
+
+
+def _get_meta() -> Any:
+    """Return the cached MetaCloudClient singleton (ctx fallback)."""
+    from app.integrations.meta_cloud import get_meta_client
+
+    return get_meta_client()
+
+
+def _get_chatwoot() -> Any:
+    """Return the cached ChatwootClient singleton (ctx fallback)."""
+    from app.integrations.chatwoot import get_chatwoot_client
+
+    return get_chatwoot_client()
+
+
+def _get_session_factory() -> Any:
+    """Return the session factory wired by the worker's on_startup (ctx fallback)."""
+    from app.main import app as _app
+
+    return _app.state.session_factory
 
 
 # ---------------------------------------------------------------------------
@@ -88,18 +110,29 @@ async def check_pending_cases(ctx: dict[str, Any]) -> dict[str, Any]:
 
     cartera_phone = cartera_allow[0]
 
-    meta = ctx["meta"]
-    chatwoot = ctx["chatwoot"]
-    db = ctx["db_session_factory"]
+    # The worker's on_startup does NOT wire these ctx keys (only db_engine) —
+    # ctx["meta"] crashed with KeyError on the first in-hours tick ever run
+    # live (2026-07-29 08:20). Resolve from the singletons/app.state instead;
+    # ctx keys remain overridable for tests.
+    meta = ctx.get("meta") or _get_meta()
+    chatwoot = ctx.get("chatwoot") or _get_chatwoot()
+    db = ctx.get("db_session_factory") or _get_session_factory()
 
     processed = 0
 
     async with db() as session:
         # Poll: awaiting_cartera cases whose SLA window has passed (D-11/D-12).
-        q = select(Case).where(
-            Case.status == "awaiting_cartera",
-            Case.work_hours_due_at <= now_utc,
-            Case.escalated_at.is_(None),
+        # selectinload: forward_case_to_cartera iterates case.attachments —
+        # a lazy load in async SQLAlchemy raises MissingGreenlet (found live
+        # 2026-07-29 on the first deferred forward ever run in-hours).
+        q = (
+            select(Case)
+            .options(selectinload(Case.attachments))
+            .where(
+                Case.status == "awaiting_cartera",
+                Case.work_hours_due_at <= now_utc,
+                Case.escalated_at.is_(None),
+            )
         )
         result = await session.execute(q)
         cases = result.scalars().all()
@@ -206,7 +239,7 @@ async def cleanup_attachments_90d(ctx: dict[str, Any]) -> dict[str, Any]:
     now_utc = _now_utc()
     cutoff = now_utc - datetime.timedelta(days=90)
 
-    db = ctx["db_session_factory"]
+    db = ctx.get("db_session_factory") or _get_session_factory()
     deleted = 0
 
     async with db() as session:
