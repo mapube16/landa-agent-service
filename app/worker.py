@@ -148,6 +148,24 @@ async def process_attachment(
         payload={"media_id": media_id, "mime_type": mime_type, "wamid": wamid},
     )
 
+    # Invocation MUST pass the values as ainvoke input (a NEW run from START).
+    # The old aupdate_state(...) + ainvoke(None) pattern is resume semantics:
+    # on a thread with a completed or interrupt()-suspended prior run it
+    # schedules nothing and returns in ~0.1s without executing any node —
+    # the comprobante silently vanishes (found live 2026-07-29 against a
+    # thread suspended at node_awaiting_cartera by an old smoke case).
+    # A fresh input run also supersedes any stale pending interrupt cleanly.
+    values: dict[str, Any] = {
+        "payment_status": "awaiting_receipt",
+        "_inbound_media": {
+            "media_id": media_id,
+            "mime_type": mime_type,
+            "wamid": wamid,
+        },
+        "wa_phone": phone,
+        "thread_id": phone,
+    }
+
     # Try to reuse a graph already compiled in the worker lifespan.
     # If not available (worker deployed before lifespan wires it), build fresh.
     graph = ctx.get("qa_graph")
@@ -162,42 +180,14 @@ async def process_attachment(
             await checkpointer.setup()
             graph = build_qa_graph().compile(checkpointer=checkpointer)
             config: RunnableConfig = {"configurable": {"thread_id": phone}}
-            await graph.aupdate_state(
-                config,
-                values={
-                    "payment_status": "awaiting_receipt",
-                    "_inbound_media": {
-                        "media_id": media_id,
-                        "mime_type": mime_type,
-                        "wamid": wamid,
-                    },
-                    "wa_phone": phone,
-                    "thread_id": phone,
-                },
-                as_node=None,
-            )
-            await graph.ainvoke(None, config=config)
+            await graph.ainvoke(values, config=config)
         finally:
             await cp_cm.__aexit__(None, None, None)
         return
 
     # Fast path: use pre-compiled graph from worker lifespan.
     config = RunnableConfig(configurable={"thread_id": phone})
-    await graph.aupdate_state(
-        config,
-        values={
-            "payment_status": "awaiting_receipt",
-            "_inbound_media": {
-                "media_id": media_id,
-                "mime_type": mime_type,
-                "wamid": wamid,
-            },
-            "wa_phone": phone,
-            "thread_id": phone,
-        },
-        as_node=None,
-    )
-    await graph.ainvoke(None, config=config)
+    await graph.ainvoke(values, config=config)
 
 
 async def verify_audit_chain(ctx: dict[str, Any]) -> None:
