@@ -67,6 +67,15 @@ def _route_entry(state: dict[str, Any]) -> str:
     if payment_status in _PAYMENT_ACTIVE_STATUSES or state.get("_inbound_media"):
         return NODE_RECEIVE_COMPROBANTE
 
+    # Layer 1 escape hatch (D-15): el webhook setea force_escalate cuando el
+    # cliente pide humano (frase o tap del boton id "agente"), pero solo
+    # node_answer lo honraba — en la etapa de identificacion el bot seguia
+    # pidiendo cedula (observado 29-jul). Enrutar a answering_qa: su PRIMER
+    # check es el escape hatch → T_08 determinista, sin LLM, desde cualquier
+    # etapa del Q&A.
+    if state.get("force_escalate"):
+        return "answering_qa"
+
     if state.get("poliza_id"):
         return "answering_qa"
     if state.get("polizas_list") and state.get("node") == "awaiting_policy_choice":
