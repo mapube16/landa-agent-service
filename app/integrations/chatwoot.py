@@ -436,12 +436,25 @@ class ChatwootClient:
         msgs: list[dict[str, Any]] = r.json().get("payload", [])
         return msgs
 
-    async def add_label(self, conversation_id: int, labels: list[str]) -> None:
-        """Set the conversation's labels (Chatwoot replaces the full set)."""
-        path = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/labels"
-        r = await self._http.post(path, json={"labels": labels})
+    async def add_labels(self, conversation_id: int, labels: list[str]) -> None:
+        """Additively apply ``labels`` to a conversation.
+
+        Chatwoot's labels endpoint REPLACES the full set, so we GET the
+        current labels first and union — otherwise adding 'escalado-humano'
+        would wipe 'en-conversacion' that a native automation rule applied.
+        """
+        base = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/labels"
+        current: list[str] = []
+        try:
+            g = await self._http.get(base)
+            g.raise_for_status()
+            current = g.json().get("payload", [])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chatwoot.labels.get_failed", error_type=type(exc).__name__)
+        merged = list(dict.fromkeys([*current, *labels]))
+        r = await self._http.post(base, json={"labels": merged})
         r.raise_for_status()
-        log.info("chatwoot.labels.set", conv_id=conversation_id, n=len(labels))
+        log.info("chatwoot.labels.set", conv_id=conversation_id, n=len(merged))
 
 
 @lru_cache(maxsize=1)

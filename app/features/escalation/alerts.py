@@ -67,6 +67,11 @@ async def notify_team_escalation(
             await chatwoot.post_private_note(
                 conv_id, f"🔔 Escalación: {quien} necesita atención humana — {motivo}."
             )
+            # Label from code because "client asked for a human" is internal
+            # flow state — a native automation rule can't tell it apart from a
+            # normal message. The other labels (sin-respuesta / en-conversacion)
+            # ARE handled by native Chatwoot rules; only this one needs the bot.
+            await chatwoot.add_labels(conv_id, ["escalado-humano"])
         except Exception as exc:  # noqa: BLE001
             log.warning("escalation_alert.chatwoot_note_failed", error_type=type(exc).__name__)
 

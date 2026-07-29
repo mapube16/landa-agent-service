@@ -221,6 +221,7 @@ async def node_receive_comprobante(state: dict[str, Any]) -> dict[str, Any]:
                 mime_type=declared_mime,
                 message_type="incoming",
             )
+            await chatwoot.add_labels(conv_id, ["comprobante-recibido"])
         except Exception as cw_exc:  # noqa: BLE001
             log.warning(
                 "payment.receive.chatwoot_mirror_failed",

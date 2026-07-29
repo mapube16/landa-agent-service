@@ -81,6 +81,32 @@ async def test_post_message_incoming_calls_correct_path(
     }
 
 
+@pytest.mark.asyncio
+async def test_add_labels_is_additive(chatwoot_client: Any, stub_http: MagicMock) -> None:
+    """add_labels unions with existing labels — never wipes what a rule set."""
+    stub_http.get.return_value = _make_response(200, {"payload": ["en-conversacion"]})
+    stub_http.post.return_value = _make_response(200, {})
+
+    await chatwoot_client.add_labels(42, ["escalado-humano"])
+
+    # GET current, then POST the union (order preserved, deduped).
+    stub_http.get.assert_awaited_once()
+    posted = stub_http.post.call_args[1]["json"]["labels"]
+    assert posted == ["en-conversacion", "escalado-humano"]
+
+
+@pytest.mark.asyncio
+async def test_add_labels_survives_get_failure(chatwoot_client: Any, stub_http: MagicMock) -> None:
+    """If reading current labels fails, still apply the new one (fail-open)."""
+    stub_http.get.side_effect = RuntimeError("boom")
+    stub_http.post.return_value = _make_response(200, {})
+
+    await chatwoot_client.add_labels(42, ["comprobante-recibido"])
+
+    posted = stub_http.post.call_args[1]["json"]["labels"]
+    assert posted == ["comprobante-recibido"]
+
+
 # ---------------------------------------------------------------------------
 # Test 2: post_message outgoing
 # ---------------------------------------------------------------------------

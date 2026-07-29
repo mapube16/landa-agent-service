@@ -84,6 +84,8 @@ async def test_alert_posts_chatwoot_private_note(cartera_settings: Any) -> None:
     conv_id, note = chatwoot.post_private_note.await_args.args
     assert conv_id == 55
     assert "Jaime" in note and "atención humana" in note
+    # Also labels the conversation escalado-humano (additive).
+    chatwoot.add_labels.assert_awaited_once_with(55, ["escalado-humano"])
 
 
 async def test_alert_note_posts_even_when_deduped(cartera_settings: Any) -> None:
