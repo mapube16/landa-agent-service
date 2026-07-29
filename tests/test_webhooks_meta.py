@@ -69,6 +69,46 @@ def _inbound_text_payload(
     ).encode("utf-8")
 
 
+def _inbound_template_button_payload(
+    message_id: str = "wamid.btn1",
+    from_: str = "15555550100",
+    payload: str = "si_ayudenme",
+    text: str = "Sí, ayúdenme",
+) -> bytes:
+    """Meta inbound payload for a template quick-reply tap (type='button')."""
+    return json.dumps(
+        {
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "1451322196454283",
+                    "changes": [
+                        {
+                            "value": {
+                                "messaging_product": "whatsapp",
+                                "metadata": {
+                                    "display_phone_number": "16415416615",
+                                    "phone_number_id": "1267241483129092",
+                                },
+                                "messages": [
+                                    {
+                                        "from": from_,
+                                        "id": message_id,
+                                        "timestamp": "1749416383",
+                                        "type": "button",
+                                        "button": {"payload": payload, "text": text},
+                                    }
+                                ],
+                            },
+                            "field": "messages",
+                        }
+                    ],
+                }
+            ],
+        }
+    ).encode("utf-8")
+
+
 def _inbound_image_payload(
     message_id: str = "wamid.img1",
     from_: str = "15555550100",
@@ -387,6 +427,42 @@ async def test_post_non_allowlisted_sender_still_dispatches(
     await asyncio.sleep(0.05)
     qa_graph_mock.ainvoke.assert_called_once()
     redis_mock.set.assert_awaited_once()
+
+
+async def test_template_button_tap_dispatches_and_audits(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+    monkeypatch: Any,
+) -> None:
+    """A template quick-reply tap (type='button') reaches the graph and is
+    audited — before the fix it fell to 'unsupported_type' and vanished."""
+    import app.webhooks.meta as meta_mod
+
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        meta_mod.audit_log,
+        "emit_task",
+        lambda **kw: emitted.append(kw),
+    )
+
+    meta_mock, redis_mock, qa_graph_mock, arq_mock = stub_app_state_f3
+    body = _inbound_template_button_payload(payload="si_ayudenme", text="Sí, ayúdenme")
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    await asyncio.sleep(0.05)
+    # Graph invoked with the button payload as the user's text.
+    qa_graph_mock.ainvoke.assert_called_once()
+    sent_state = qa_graph_mock.ainvoke.call_args.args[0]
+    assert sent_state["messages"][0].content == "si_ayudenme"
+    # Audited so we can trace who tapped what.
+    taps = [e for e in emitted if e.get("action") == "template_button_tap"]
+    assert len(taps) == 1
+    assert taps[0]["payload"]["button_payload"] == "si_ayudenme"
 
 
 async def test_muted_phone_skips_graph_but_mirrors(

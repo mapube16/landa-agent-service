@@ -795,6 +795,28 @@ async def _dispatch_message(  # noqa: C901
     if msg.type == "button" and msg.button is not None:
         selected = msg.button.payload or msg.button.text
         if selected:
+            # Traceability (D-11 audit): who tapped which template button.
+            # phone_hash keeps PII out of logs (CLAUDE.md); the audit row lets
+            # us reconstruct "this client tapped si_ayudenme at T" to debug
+            # or correct the follow-up behaviour later.
+            log.info(
+                "webhook.template_button.tap",
+                message_id=msg.id,
+                phone_hash=phone_hash,
+                payload=msg.button.payload,
+                label=msg.button.text,
+                result="template_button_dispatched",
+            )
+            audit_log.emit_task(
+                action="template_button_tap",
+                actor="client",
+                conversation_id=_hash_phone(msg.from_),
+                payload={
+                    "wamid": msg.id,
+                    "button_payload": msg.button.payload,
+                    "button_label": msg.button.text,
+                },
+            )
             msg.text = MessageText(body=selected)
             await _handle_text_message(msg=msg, meta=meta, phone_hash=phone_hash, request=request)
             return
