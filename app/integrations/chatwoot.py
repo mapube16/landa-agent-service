@@ -373,8 +373,12 @@ class ChatwootClient:
         validates the host BEFORE calling (T-04-03-05). Uses the shared
         ``_http`` client so the ``api_access_token`` header authenticates
         the blob request.
+
+        ``follow_redirects`` is required: ActiveStorage serves blobs via a
+        302 to a same-host signed URL — without it the relay uploaded the
+        empty redirect body to Meta and every agent attachment failed.
         """
-        r = await self._http.get(data_url)
+        r = await self._http.get(data_url, follow_redirects=True)
         r.raise_for_status()
         return bytes(r.content)
 

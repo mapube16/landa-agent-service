@@ -58,8 +58,22 @@ el comprobante se perdía en silencio. Ahora pasa los values como input de
 `ainvoke` (run nuevo desde START). También arreglado el loop espejo→relay que
 duplicaba cada respuesta del bot (`cf9dd7f`, marca `content_attributes.bot_mirror`).
 
-**2 gaps de espejo Chatwoot (observabilidad, NO bloquean al cliente — arreglar
-juntos después del smoke):**
+**Mute de bot en takeover humano (2026-07-29 madrugada, commit pendiente de
+deploy hasta después del smoke de las 8:20):** `app/features/escalation/mute.py`
+— flag Redis `bot:muted:{+E164}` con TTL 24h. Se activa cuando el bot escala
+(nodo `escalating`) o cuando un agente humano responde desde Chatwoot; mientras
+está activo, texto/botones del cliente NO van al grafo (pero SÍ se espejan a
+Chatwoot, y los comprobantes siguen entrando al flujo de pago). Se desactiva
+cuando el agente marca "Resolver" (evento `conversation_resolved` del webhook)
+o al expirar el TTL. IMPORTANTE: la escalación YA NO marca la conversación
+como resuelta en Chatwoot (quedaba oculta de la bandeja del equipo y chocaba
+con el unmute) — ahora queda abierta.
+
+**Chatwoot actualizado a 4.16.2** (2026-07-29, redeploy del template — versión
+verificada vía `/api`).
+
+**2 gaps de espejo Chatwoot (RESUELTOS 2026-07-29 — commits `3bd521d` +
+`12d8e3a`, barrido completo de 22 callsites):**
 1. La imagen del comprobante no se sube a Chatwoot — el mirror solo postea el
    placeholder `[comprobante recibido: image/jpeg]`. Falta subir el archivo
    (ya está en el volumen) vía multipart al crear el mensaje en Chatwoot.

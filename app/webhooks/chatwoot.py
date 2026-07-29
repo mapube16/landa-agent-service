@@ -196,6 +196,13 @@ async def _resolve_and_relay(
         n_attachments=len(attachments),
         content_len=len(content),
     )
+
+    # A human replied → takeover: mute the bot until the agent resolves
+    # the conversation (or the 24h TTL expires).
+    from app.features.escalation.mute import set_muted
+
+    await set_muted(request.app.state.redis, phone)
+
     return {"ok": True, "msg_id": msg_id}
 
 
@@ -226,6 +233,18 @@ async def receive(request: Request) -> dict[str, Any]:
     except orjson.JSONDecodeError:
         log.warning("chatwoot.webhook.malformed")
         return {"ignored": "malformed"}
+
+    # Agent resolved the conversation → re-activate the bot (mute unwind).
+    if payload.get("event") == "conversation_resolved":
+        conv_id = payload.get("id") or (payload.get("conversation") or {}).get("id")
+        if conv_id is not None:
+            phone = await request.app.state.chatwoot.get_phone_by_conv(int(conv_id))
+            if phone:
+                from app.features.escalation.mute import clear_muted
+
+                await clear_muted(request.app.state.redis, phone)
+                return {"ok": "unmuted"}
+        return {"ignored": "resolved_no_phone"}
 
     reason = _filter_reason(payload)
     if reason is not None:

@@ -55,6 +55,7 @@ def mocks() -> tuple[MagicMock, MagicMock, MagicMock]:
 
     redis = MagicMock()
     redis.set = AsyncMock(return_value=True)  # default: first-see
+    redis.delete = AsyncMock(return_value=1)
     return meta, chatwoot, redis
 
 
@@ -129,6 +130,40 @@ async def test_ignores_agent_bot(
     meta.send_text.assert_not_called()
 
 
+async def test_relay_mutes_bot(
+    client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
+) -> None:
+    """A human agent reply mutes the bot for that phone (human takeover)."""
+    _, chatwoot, redis = mocks
+    chatwoot.get_phone_by_conv.return_value = "+573001112233"
+    body = _payload()
+    r = await client.post(
+        "/webhooks/chatwoot", content=body, headers={"X-Chatwoot-Signature": _sign(body)}
+    )
+    assert r.status_code == 200
+    mute_sets = [
+        c for c in redis.set.await_args_list if c.args and c.args[0].startswith(b"bot:muted:")
+    ]
+    assert len(mute_sets) == 1
+    assert mute_sets[0].args[0] == b"bot:muted:+573001112233"
+
+
+async def test_conversation_resolved_unmutes_bot(
+    client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
+) -> None:
+    """Agent hitting 'Resolver' clears the mute so the bot re-activates."""
+    meta, chatwoot, redis = mocks
+    chatwoot.get_phone_by_conv.return_value = "+573001112233"
+    body = _payload(event="conversation_resolved", id=42)
+    r = await client.post(
+        "/webhooks/chatwoot", content=body, headers={"X-Chatwoot-Signature": _sign(body)}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": "unmuted"}
+    redis.delete.assert_awaited_once_with(b"bot:muted:+573001112233")
+    meta.send_text.assert_not_called()
+
+
 async def test_ignores_bot_mirror_attribute(
     client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
 ) -> None:
@@ -150,7 +185,20 @@ async def test_dedups_duplicate_id(
 ) -> None:
     """Second delivery of the same message id within 24h is dropped (D-17)."""
     meta, _, redis = mocks
-    redis.set.side_effect = [True, None]  # first-see, then duplicate
+    # Key-aware side_effect: the dedup key is first-seen once then duplicate;
+    # unrelated writes (e.g. the bot:muted takeover flag) always succeed.
+    seen_dedup = False
+
+    async def _set(key: bytes, *args: object, **kwargs: object) -> bool | None:
+        nonlocal seen_dedup
+        if key.startswith(b"chatwoot:msg:"):
+            if seen_dedup:
+                return None
+            seen_dedup = True
+            return True
+        return True
+
+    redis.set.side_effect = _set
     body = _payload()
     headers = {"X-Chatwoot-Signature": _sign(body)}
 

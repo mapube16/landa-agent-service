@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -386,6 +387,37 @@ async def test_post_non_allowlisted_sender_still_dispatches(
     await asyncio.sleep(0.05)
     qa_graph_mock.ainvoke.assert_called_once()
     redis_mock.set.assert_awaited_once()
+
+
+async def test_muted_phone_skips_graph_but_mirrors(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+    monkeypatch: Any,
+) -> None:
+    """Human takeover: muted phone → no graph dispatch, inbound still mirrored."""
+    import app.features.escalation.mute as mute_mod
+
+    async def _always_muted(redis: Any, phone: str) -> bool:
+        return True
+
+    monkeypatch.setattr(mute_mod, "is_muted", _always_muted)
+
+    meta_mock, redis_mock, qa_graph_mock, arq_mock = stub_app_state_f3
+    body = _inbound_text_payload(from_="15555550100")
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    await asyncio.sleep(0.05)
+    qa_graph_mock.ainvoke.assert_not_called()
+    meta_mock.send_text.assert_not_called()
+    mirror_calls = [
+        c for c in arq_mock.enqueue_job.call_args_list if c.args and c.args[0] == "mirror_inbound"
+    ]
+    assert len(mirror_calls) == 1
 
 
 async def test_post_image_message_enqueues_process_attachment(

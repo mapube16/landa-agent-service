@@ -294,9 +294,21 @@ async def _run_and_dispatch(
     if outbound_msg is not None:
         await _send_outbound(app_state, phone, outbound_msg, wamid)
 
-    # Chatwoot mark_resolved on terminal states
     terminal_node = final_state.get("node")
-    if terminal_node in ("escalating", "closed") and hasattr(app_state, "chatwoot"):
+
+    # Escalation → mute the bot so it stops interrupting the human agent.
+    # The conversation stays OPEN in Chatwoot (resolving it would hide it
+    # from the team's queue AND re-activate the bot via the resolved-event
+    # unmute). Unmute paths: agent resolves, or the 24h TTL expires.
+    if terminal_node == "escalating":
+        from app.features.escalation.mute import set_muted
+
+        redis = getattr(app_state, "redis", None)
+        if redis is not None:
+            await set_muted(redis, phone)
+
+    # Chatwoot mark_resolved only on normal conversation close.
+    if terminal_node == "closed" and hasattr(app_state, "chatwoot"):
         try:
             conv_id = getattr(app_state, "_chatwoot_conv_cache", {}).get(thread_id)
             if conv_id:
@@ -716,6 +728,41 @@ async def _dispatch_message(  # noqa: C901
         except Exception as exc:  # noqa: BLE001
             log.error("webhook.rate_limited.send_failed", error_type=type(exc).__name__)
         return
+
+    # 4d'. Human takeover mute: while an agent owns the conversation the bot
+    #      stays silent on text/interactive — but the client's messages are
+    #      still mirrored so the agent sees them, and comprobantes (image/
+    #      document below) still enter the deterministic payment intake.
+    if msg.type in {"text", "interactive"}:
+        from app.features.escalation.mute import is_muted
+
+        if await is_muted(redis, normalized_from):
+            mirror_text = (
+                msg.text.body
+                if msg.type == "text" and msg.text is not None
+                else (
+                    f"[opción elegida: {msg.interactive.selected_id()}]"
+                    if msg.interactive is not None
+                    else ""
+                )
+            )
+            app_state = request.app.state
+            if mirror_text and hasattr(app_state, "arq") and app_state.arq is not None:
+                try:
+                    await app_state.arq.enqueue_job(
+                        "mirror_inbound", phone=msg.from_, text=mirror_text, wamid=msg.id
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "webhook.muted.mirror_inbound.failed", error_type=type(exc).__name__
+                    )
+            log.info(
+                "webhook.muted.skip",
+                message_id=msg.id,
+                phone_hash=phone_hash,
+                result="muted_human_takeover",
+            )
+            return
 
     # 4e. Text message: firewall + escape hatch + graph dispatch (Plan 03-05).
     if msg.type == "text" and msg.text is not None:
