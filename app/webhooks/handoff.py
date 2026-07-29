@@ -37,12 +37,21 @@ log = structlog.get_logger("webhooks.handoff")
 
 
 class NoAnswerHandoff(BaseModel):
-    """Body contract for the lambda-proyect no-answer handoff (D-19)."""
+    """Body contract for the lambda-proyect no-answer handoff (D-19).
+
+    ``documento`` is optional (backward compatible): when VOICE sends it, the
+    handoff resolves the SoftSeguros poliza id and seeds the QA thread so the
+    client is NEVER asked for their document (client decision 2026-07-29:
+    the bot must already know which poliza the call was about). Without it,
+    the QA greeting still carries the poliza context but asks for the
+    document to confirm identity.
+    """
 
     phone: str = Field(pattern=r"^\+\d{8,15}$")  # E.164 (T-04-07-04)
     cliente_nombre: str = Field(min_length=1, max_length=80)
     numero_poliza: str = Field(min_length=1, max_length=40)
     case_id: uuid.UUID
+    documento: str | None = Field(default=None, max_length=20)
 
 
 class CaseHandoff(BaseModel):
@@ -142,7 +151,67 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
         f"[ARIA envió plantilla de seguimiento por llamada no contestada a "
         f"{body.cliente_nombre} — botones: Sí, ayúdenme / Más tarde]",
     )
+
+    await _seed_qa_thread(request, body)
+
     return {"case_id": case_id, "sent": True}
+
+
+async def _seed_qa_thread(request: Request, body: NoAnswerHandoff) -> None:
+    """Seed the QA thread with the handoff context (fail-open).
+
+    Always seeds ``cliente_nombre`` + ``handoff_numero_poliza`` so the
+    greeting is contextual. When ``documento`` is present, additionally
+    resolves documento -> cliente -> polizas -> matching numero and seeds
+    ``poliza_id`` — the entry router then dispatches straight to
+    ``answering_qa`` and the client is never asked for their document.
+    """
+    qa_graph = getattr(request.app.state, "qa_graph", None)
+    if qa_graph is None:
+        return
+
+    seed: dict[str, object] = {
+        "wa_phone": body.phone.lstrip("+"),
+        "cliente_nombre": body.cliente_nombre,
+        "handoff_numero_poliza": body.numero_poliza,
+    }
+
+    if body.documento:
+        try:
+            from app.integrations.softseguros import get_softseguros_client
+
+            client = get_softseguros_client()
+            cliente = await client.get_clientes_by_documento(body.documento)
+            cliente_id = cliente.get("id") if isinstance(cliente, dict) else None
+            if cliente_id is not None:
+                polizas = await client.get_polizas_by_cliente(int(cliente_id))
+                match = next(
+                    (p for p in polizas if str(p.get("numero_poliza", "")) == body.numero_poliza),
+                    None,
+                )
+                if match is not None:
+                    seed["poliza_id"] = str(match.get("id", match.get("numero_poliza")))
+                    seed["cliente_doc"] = body.documento
+        except Exception as exc:  # noqa: BLE001
+            # Fail-open: fall back to the contextual-greeting seed only.
+            log.warning(
+                "handoff.no_answer.poliza_resolve_failed",
+                error_type=type(exc).__name__,
+            )
+
+    try:
+        await qa_graph.aupdate_state(
+            {"configurable": {"thread_id": body.phone}},
+            values=seed,
+            as_node=None,
+        )
+        log.info(
+            "handoff.no_answer.qa_thread_seeded",
+            phone_hash=_hash_phone(body.phone),
+            poliza_locked="poliza_id" in seed,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("handoff.no_answer.seed_failed", error_type=type(exc).__name__)
 
 
 @router.post("/handoff", dependencies=[Depends(_verify_bearer)])

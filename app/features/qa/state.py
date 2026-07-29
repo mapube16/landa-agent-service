@@ -117,6 +117,12 @@ class QAState(TypedDict, total=False):
     # cliente_nombre is part of the comprobante caption (D-08). Set by
     # node_identify when identification succeeds, or from a case handoff.
     cliente_nombre: NotRequired[str | None]
+    # Seeded by POST /case/handoff/no_answer: the poliza the voice call was
+    # about. Lets node_identify greet with context ("te escribimos por tu
+    # póliza POL-X") instead of a cold document request. When the handoff
+    # also resolves the SoftSeguros id, poliza_id is seeded directly and the
+    # identification step is skipped entirely.
+    handoff_numero_poliza: NotRequired[str | None]
 
 
 __all__ = ["QAState"]

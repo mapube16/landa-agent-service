@@ -46,7 +46,7 @@ T_03: str = (
 # Use ``interpolate_t04`` to produce the final string.
 T_04: str = (
     "Encontré {N} pólizas a tu nombre:\n\n{lista_numerada}\n\n"
-    "¿Sobre cuál querés preguntar? "
+    "¿Sobre cuál quieres preguntar? "
     "Respondé con el número o el número de póliza."
 )
 

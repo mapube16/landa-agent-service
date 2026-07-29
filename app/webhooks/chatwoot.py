@@ -201,11 +201,11 @@ async def _resolve_and_relay(
         content_len=len(content),
     )
 
-    # A human replied → takeover: mute the bot until the agent resolves
-    # the conversation (or the 24h TTL expires).
-    from app.features.escalation.mute import set_muted
+    # A human replied → real takeover: hard mute (no grace auto-recovery)
+    # until the agent resolves the conversation (or the 24h TTL expires).
+    from app.features.escalation.mute import set_human
 
-    await set_muted(request.app.state.redis, phone)
+    await set_human(request.app.state.redis, phone)
 
     return {"ok": True, "msg_id": msg_id}
 

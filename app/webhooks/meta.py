@@ -271,50 +271,62 @@ async def _run_and_dispatch(
 
     Wrapped in asyncio.create_task by the webhook handler so it does not
     block the 200 OK response to Meta (Meta retries on non-200).
+
+    Serialized per conversation via ``conversation_lock``: two rapid messages
+    from the same client (e.g. tapping "estado" then "coberturas") used to run
+    two concurrent graph invocations against the same LangGraph thread and
+    race on the Postgres checkpoint — one or both died silently and the bot
+    looked stuck (found live 2026-07-29).
     """
-    try:
-        final_state = await app_state.qa_graph.ainvoke(
-            initial_state,
-            config={"configurable": {"thread_id": thread_id}},
-        )
-    except Exception as exc:  # noqa: BLE001
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        body = getattr(getattr(exc, "response", None), "text", "")[:300]
-        url = str(getattr(getattr(exc, "request", None), "url", ""))[:200]
-        log.error(
-            "qa_graph.run_failed",
-            error_type=type(exc).__name__,
-            status=status,
-            body=body,
-            url=url,
-        )
-        return
+    from app.features.escalation.conv_lock import conversation_lock
 
-    outbound_msg = _extract_outbound_message(final_state)
-    if outbound_msg is not None:
-        await _send_outbound(app_state, phone, outbound_msg, wamid)
-
-    terminal_node = final_state.get("node")
-
-    # Escalation → mute the bot so it stops interrupting the human agent.
-    # The conversation stays OPEN in Chatwoot (resolving it would hide it
-    # from the team's queue AND re-activate the bot via the resolved-event
-    # unmute). Unmute paths: agent resolves, or the 24h TTL expires.
-    if terminal_node == "escalating":
-        from app.features.escalation.mute import set_muted
-
-        redis = getattr(app_state, "redis", None)
-        if redis is not None:
-            await set_muted(redis, phone)
-
-    # Chatwoot mark_resolved only on normal conversation close.
-    if terminal_node == "closed" and hasattr(app_state, "chatwoot"):
+    redis = getattr(app_state, "redis", None)
+    async with conversation_lock(redis, thread_id):
         try:
-            conv_id = getattr(app_state, "_chatwoot_conv_cache", {}).get(thread_id)
-            if conv_id:
-                await app_state.chatwoot.mark_resolved(conv_id)
+            final_state = await app_state.qa_graph.ainvoke(
+                initial_state,
+                config={"configurable": {"thread_id": thread_id}},
+            )
         except Exception as exc:  # noqa: BLE001
-            log.warning("qa_graph.chatwoot.mark_resolved.failed", error_type=type(exc).__name__)
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            body = getattr(getattr(exc, "response", None), "text", "")[:300]
+            url = str(getattr(getattr(exc, "request", None), "url", ""))[:200]
+            log.error(
+                "qa_graph.run_failed",
+                error_type=type(exc).__name__,
+                status=status,
+                body=body,
+                url=url,
+            )
+            return
+
+        outbound_msg = _extract_outbound_message(final_state)
+        if outbound_msg is not None:
+            await _send_outbound(app_state, phone, outbound_msg, wamid)
+
+        terminal_node = final_state.get("node")
+
+        # Escalation → mute the bot so it stops interrupting the human agent.
+        # The conversation stays OPEN in Chatwoot (resolving it would hide it
+        # from the team's queue AND re-activate the bot via the resolved-event
+        # unmute). This is the *escalated* state: auto-recovers if no human
+        # ever replies (30 min grace), so an unattended escalation never
+        # leaves the client botless. Becomes a hard mute only once an agent
+        # actually replies.
+        if terminal_node == "escalating":
+            from app.features.escalation.mute import set_escalated
+
+            if redis is not None:
+                await set_escalated(redis, phone)
+
+        # Chatwoot mark_resolved only on normal conversation close.
+        if terminal_node == "closed" and hasattr(app_state, "chatwoot"):
+            try:
+                conv_id = getattr(app_state, "_chatwoot_conv_cache", {}).get(thread_id)
+                if conv_id:
+                    await app_state.chatwoot.mark_resolved(conv_id)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("qa_graph.chatwoot.mark_resolved.failed", error_type=type(exc).__name__)
 
 
 @router.get("/meta")
@@ -794,6 +806,22 @@ async def _dispatch_message(  # noqa: C901
     # con voice_no_answer_followup: el cliente tocaba el botón y no pasaba nada).
     if msg.type == "button" and msg.button is not None:
         selected = msg.button.payload or msg.button.text
+        # D-21: "Más tarde" gets a fixed courteous close — no LLM, no graph.
+        if selected == "mas_tarde":
+            reply = "¡Listo! Escríbenos cuando puedas. Que tengas un buen día. 😊"
+            try:
+                await meta.send_text(to=msg.from_, body=reply)
+                await _enqueue_mirror_outbound(request.app.state, msg.from_, reply, f"{msg.id}:out")
+            except Exception as exc:  # noqa: BLE001
+                log.error("webhook.mas_tarde.send_failed", error_type=type(exc).__name__)
+            log.info(
+                "webhook.template_button.tap",
+                message_id=msg.id,
+                phone_hash=phone_hash,
+                payload=selected,
+                result="mas_tarde_closed",
+            )
+            return
         if selected:
             # Traceability (D-11 audit): who tapped which template button.
             # phone_hash keeps PII out of logs (CLAUDE.md); the audit row lets

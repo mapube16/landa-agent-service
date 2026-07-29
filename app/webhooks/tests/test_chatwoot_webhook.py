@@ -160,6 +160,8 @@ async def test_relay_mutes_bot(
     ]
     assert len(mute_sets) == 1
     assert mute_sets[0].args[0] == b"bot:muted:+573001112233"
+    # Human reply is a hard mute (no grace auto-recovery).
+    assert mute_sets[0].args[1].startswith(b"human:")
 
 
 async def test_conversation_resolved_unmutes_bot(

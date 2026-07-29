@@ -122,7 +122,9 @@ def _build_policy_list(polizas: list[dict[str, Any]]) -> str:
         numero = p.get("numero_poliza", p.get("id", "?"))
         ramo = p.get("ramo_nombre", p.get("ramo", ""))
         estado = p.get("estado_poliza_nombre", p.get("estado", ""))
-        lines.append(f"{emoji} POL-{numero} ({ramo}, {estado})")
+        riesgo = p.get("poliza_codio_objeto_asegurado") or ""
+        detail = ", ".join(x for x in (ramo, riesgo, estado) if x)
+        lines.append(f"{emoji} POL-{numero} ({detail})")
     return "\n".join(lines)
 
 
@@ -145,8 +147,13 @@ def _polizas_list_message(polizas: list[dict[str, Any]], page: int) -> AIMessage
         numero = p.get("numero_poliza", pid)
         ramo = p.get("ramo_nombre", p.get("ramo", ""))
         estado = p.get("estado_poliza_nombre", p.get("estado", ""))
+        # Informe §5: the list must show ramo + riesgo asegurado + numero.
+        # "riesgo" = upstream field poliza_codio_objeto_asegurado (sic) — the
+        # insured object (e.g. the plate for AUTOMÓVILES).
+        riesgo = p.get("poliza_codio_objeto_asegurado") or ""
         title = f"POL-{numero}"[:24]
-        desc = f"{ramo} · {estado}"[:72] if ramo or estado else None
+        desc_parts = [x for x in (ramo, riesgo, estado) if x]
+        desc = " · ".join(desc_parts)[:72] if desc_parts else None
         rows.append((pid, title, desc))
     if has_more:
         rows.append((_MORE_BUTTON_ID, "Ver más pólizas", f"{n - end} restantes"))
@@ -176,8 +183,8 @@ def _qa_menu_message(numero: str) -> AIMessage:
     User can also type freely — buttons are a shortcut, not the only path.
     """
     body = (
-        f"Listo, sobre la póliza POL-{numero}. ¿Qué querés saber?"
-        " Tocá una opción o escribí tu pregunta."
+        f"Listo, sobre la póliza POL-{numero}. ¿Qué quieres saber?"
+        " Toca una opción o escribe tu pregunta."
     )
     return AIMessage(
         content=body,
@@ -225,12 +232,27 @@ async def node_identify(state: QAState) -> dict[str, Any]:
     """
     text = _last_human_text(state)
 
-    # First contact or no document requested yet → emit T-01 and wait
+    # First contact or no document requested yet → emit T-01 and wait.
+    # Handoff context (voice call about a known poliza): greet WITH context
+    # so the client understands why we ask for their document — a cold T-01
+    # right after "te llamamos por tu póliza" read as a non-sequitur
+    # (observed live 2026-07-29).
     if not state.get("asked_for_doc"):
+        handoff_numero = state.get("handoff_numero_poliza")
+        if handoff_numero:
+            nombre = state.get("cliente_nombre") or ""
+            saludo = f"¡Hola{', ' + nombre if nombre else ''}! 👋 "
+            greeting = (
+                f"{saludo}Soy el asistente virtual de DPG Seguros. Te escribimos "
+                f"por tu póliza POL-{handoff_numero}. Para confirmar tu identidad "
+                "y mostrarte la información, ¿me das tu número de documento?"
+            )
+        else:
+            greeting = T_01
         return {
             "node": "awaiting_identification",
             "asked_for_doc": True,
-            "messages": [AIMessage(content=T_01)],
+            "messages": [AIMessage(content=greeting)],
         }
 
     try:
@@ -261,16 +283,31 @@ async def node_identify(state: QAState) -> dict[str, Any]:
         # 404 = documento no existe en SoftSeguros (user error, not system error).
         # Ask to verify — no retry limit, just keep asking until they get it right.
         if status == 404:
+            # Not-found must never be a dead end: always offer the human
+            # escape (found live 2026-07-29: a client wrote "No tengo póliza
+            # con la empresa" and the bot just kept asking for a document).
+            # Button id "agente" matches ESCAPE_REGEX → Layer 1 escalation.
+            body_404 = (
+                "No encontré ningún cliente con ese número de documento "
+                "en el sistema de DPG. 🔍\n\n"
+                "¿Puedes verificar que el número esté correcto? "
+                "Puede ser cédula de ciudadanía, NIT o cédula de extranjería.\n\n"
+                "Si no tienes póliza o prefieres hablar con una persona, "
+                "toca el botón."
+            )
             return {
                 "node": "awaiting_identification",
                 "messages": [
                     AIMessage(
-                        content=(
-                            "No encontré ningún cliente con ese número de documento "
-                            "en el sistema de DPG. 🔍\n\n"
-                            "¿Podés verificar que el número esté correcto? "
-                            "Puede ser cédula de ciudadanía, NIT o cédula de extranjería."
-                        )
+                        content=body_404,
+                        additional_kwargs={
+                            "interactive": {
+                                "kind": "buttons",
+                                "body": body_404,
+                                "buttons": [("agente", "Hablar humano")],
+                            },
+                            "send_to_client": True,
+                        },
                     )
                 ],
             }
@@ -350,7 +387,7 @@ async def _resolve_by_llm_fallback(
         fallback_prompt = (
             f"El cliente respondió: '{text}'.\n"
             f"¿A cuál de estos numero_poliza se refiere? Allowlist: {allowlist_nums}\n"
-            "Responde SOLO el numero exacto de la lista, o NONE si no podés decidir."
+            "Responde SOLO el numero exacto de la lista, o NONE si no puedes decidir."
         )
         resp = await llm.ainvoke(fallback_prompt)
         llm_text = str(getattr(resp, "content", resp)).strip()

@@ -99,6 +99,58 @@ async def client(meta: MagicMock, session: _FakeSession) -> AsyncIterator[AsyncC
         yield ac
 
 
+async def test_seed_without_documento_sets_context_only(
+    client: AsyncClient, meta: MagicMock, session: _FakeSession
+) -> None:
+    """No documento → seed carries greeting context but never locks a poliza."""
+    qa_graph = MagicMock()
+    qa_graph.aupdate_state = AsyncMock()
+    transport = client._transport  # type: ignore[attr-defined]
+    transport.app.state.qa_graph = qa_graph  # type: ignore[attr-defined]
+
+    r = await client.post("/case/handoff/no_answer", json=_body(), headers=AUTH)
+    assert r.status_code == 200
+
+    qa_graph.aupdate_state.assert_awaited_once()
+    values = qa_graph.aupdate_state.await_args.kwargs["values"]
+    assert values["handoff_numero_poliza"] == "12345"
+    assert values["cliente_nombre"] == "Juan"
+    assert "poliza_id" not in values
+
+
+async def test_seed_with_documento_locks_poliza(
+    client: AsyncClient,
+    meta: MagicMock,
+    session: _FakeSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """documento present → resolve via SoftSeguros and seed poliza_id."""
+    import app.integrations.softseguros as ss_mod
+
+    ss = MagicMock()
+    ss.get_clientes_by_documento = AsyncMock(return_value={"id": 77})
+    ss.get_polizas_by_cliente = AsyncMock(
+        return_value=[
+            {"id": 999, "numero_poliza": "otra"},
+            {"id": 1234, "numero_poliza": "12345"},
+        ]
+    )
+    monkeypatch.setattr(ss_mod, "get_softseguros_client", lambda: ss)
+
+    qa_graph = MagicMock()
+    qa_graph.aupdate_state = AsyncMock()
+    transport = client._transport  # type: ignore[attr-defined]
+    transport.app.state.qa_graph = qa_graph  # type: ignore[attr-defined]
+
+    r = await client.post("/case/handoff/no_answer", json=_body(documento="18496452"), headers=AUTH)
+    assert r.status_code == 200
+
+    values = qa_graph.aupdate_state.await_args.kwargs["values"]
+    assert values["poliza_id"] == "1234"
+    assert values["cliente_doc"] == "18496452"
+    ss.get_clientes_by_documento.assert_awaited_once_with("18496452")
+
+
 async def test_missing_bearer_returns_401(client: AsyncClient, meta: MagicMock) -> None:
     r = await client.post("/case/handoff/no_answer", json=_body())
     assert r.status_code == 401

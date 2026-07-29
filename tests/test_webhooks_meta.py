@@ -347,8 +347,11 @@ async def test_post_valid_hmac_text_message_dispatches_to_graph(
     )
     assert r.status_code == 200
     # Dedup gate called with binary-safe key + value
-    redis_mock.set.assert_awaited_once()
-    set_args, set_kwargs = redis_mock.set.call_args
+    dedup_sets = [
+        c for c in redis_mock.set.await_args_list if c.args and c.args[0].startswith(b"wa:msg:")
+    ]
+    assert len(dedup_sets) == 1
+    set_args, set_kwargs = dedup_sets[0]
     assert set_args[0] == b"wa:msg:wamid.test1"
     assert set_args[1] == b"1"
     assert set_kwargs == {"nx": True, "ex": 86400}
@@ -394,7 +397,18 @@ async def test_post_duplicate_message_id_skips_dispatch(
 ) -> None:
     meta_mock, redis_mock, qa_graph_mock, arq_mock = stub_app_state_f3
     # First request: redis returns True (first see), second returns None (dup).
-    redis_mock.set = AsyncMock(side_effect=[True, None])
+    seen_dedup = False
+
+    async def _set(key: bytes, *a: object, **kw: object) -> bool | None:
+        nonlocal seen_dedup
+        if key.startswith(b"wa:msg:"):
+            if seen_dedup:
+                return None
+            seen_dedup = True
+            return True
+        return True
+
+    redis_mock.set = AsyncMock(side_effect=_set)
     body = _inbound_text_payload(message_id="wamid.dup")
     sig = _sign(body)
     headers = {"X-Hub-Signature-256": sig, "Content-Type": "application/json"}
@@ -426,7 +440,10 @@ async def test_post_non_allowlisted_sender_still_dispatches(
     assert r.status_code == 200
     await asyncio.sleep(0.05)
     qa_graph_mock.ainvoke.assert_called_once()
-    redis_mock.set.assert_awaited_once()
+    dedup_sets = [
+        c for c in redis_mock.set.await_args_list if c.args and c.args[0].startswith(b"wa:msg:")
+    ]
+    assert len(dedup_sets) == 1
 
 
 async def test_template_button_tap_dispatches_and_audits(
@@ -463,6 +480,26 @@ async def test_template_button_tap_dispatches_and_audits(
     taps = [e for e in emitted if e.get("action") == "template_button_tap"]
     assert len(taps) == 1
     assert taps[0]["payload"]["button_payload"] == "si_ayudenme"
+
+
+async def test_mas_tarde_button_gets_fixed_close_no_graph(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+) -> None:
+    """D-21: 'Más tarde' → fixed courteous reply, no LLM/graph invocation."""
+    meta_mock, redis_mock, qa_graph_mock, arq_mock = stub_app_state_f3
+    body = _inbound_template_button_payload(payload="mas_tarde", text="Más tarde")
+    sig = _sign(body)
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+    await asyncio.sleep(0.05)
+    qa_graph_mock.ainvoke.assert_not_called()
+    meta_mock.send_text.assert_awaited_once()
+    assert "Escríbenos cuando puedas" in meta_mock.send_text.await_args.kwargs["body"]
 
 
 async def test_muted_phone_skips_graph_but_mirrors(
