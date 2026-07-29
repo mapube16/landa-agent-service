@@ -314,10 +314,21 @@ async def _run_and_dispatch(
         # leaves the client botless. Becomes a hard mute only once an agent
         # actually replies.
         if terminal_node == "escalating":
+            from app.features.escalation.alerts import notify_team_escalation
             from app.features.escalation.mute import set_escalated
 
             if redis is not None:
                 await set_escalated(redis, phone)
+            # Active WhatsApp alert to the team (deduped 30 min per client) —
+            # Chatwoot's in-app notification alone is missable.
+            if hasattr(app_state, "meta"):
+                await notify_team_escalation(
+                    app_state.meta,
+                    redis,
+                    client_phone=phone,
+                    reason=final_state.get("escalation_reason"),
+                    cliente_nombre=final_state.get("cliente_nombre"),
+                )
 
         # Chatwoot mark_resolved only on normal conversation close.
         if terminal_node == "closed" and hasattr(app_state, "chatwoot"):
