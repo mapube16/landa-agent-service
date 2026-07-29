@@ -129,6 +129,22 @@ async def test_ignores_agent_bot(
     meta.send_text.assert_not_called()
 
 
+async def test_ignores_bot_mirror_attribute(
+    client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
+) -> None:
+    """Loop prevention: mirrors posted via ChatwootClient carry
+    content_attributes.bot_mirror and sender.type == "user" (user-level API
+    token) — without this filter every bot reply echoed back as a duplicate."""
+    meta, _, _ = mocks
+    body = _payload(content_attributes={"bot_mirror": True})
+    r = await client.post(
+        "/webhooks/chatwoot", content=body, headers={"X-Chatwoot-Signature": _sign(body)}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ignored": "bot_mirror"}
+    meta.send_text.assert_not_called()
+
+
 async def test_dedups_duplicate_id(
     client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
 ) -> None:

@@ -134,7 +134,10 @@ def _filter_reason(payload: dict[str, Any]) -> str | None:
 
     Filters (D-15): only ``message_created`` + ``outgoing`` + human sender
     (``sender.type == "user"``) relay. ``agent_bot`` mirrors are dropped —
-    loop prevention (T-04-03-03).
+    loop prevention (T-04-03-03). Bot mirrors posted via ChatwootClient carry
+    ``content_attributes.bot_mirror`` (the API posts with a user token, so
+    ``sender.type`` alone cannot distinguish them from human agents) — without
+    this check every bot reply echoed back to the client as a duplicate.
     """
     if payload.get("event") != "message_created":
         return "event"
@@ -142,6 +145,8 @@ def _filter_reason(payload: dict[str, Any]) -> str | None:
         return "message_type"
     if (payload.get("sender") or {}).get("type") != "user":
         return "sender_type"
+    if (payload.get("content_attributes") or {}).get("bot_mirror"):
+        return "bot_mirror"
     return None
 
 

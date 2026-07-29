@@ -63,10 +63,23 @@ class ChatwootClient:
         ``incoming`` = client's WhatsApp message (shown on left in Chatwoot).
         ``outgoing`` = bot's response (shown on right, attributed to the API agent).
 
+        Every message posted through this client is a MIRROR of WhatsApp
+        traffic — ``content_attributes.bot_mirror`` marks it so the outbound
+        webhook relay (webhooks/chatwoot.py) never relays it back to the
+        client. The API posts with a user-level token, so ``sender.type`` is
+        ``user`` (not ``agent_bot``) and cannot be used for loop prevention.
+
         Never logs ``content`` raw -- only ``content_len`` (T-03-03-01 mitigation).
         """
         path = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/messages"
-        r = await self._http.post(path, json={"content": content, "message_type": message_type})
+        r = await self._http.post(
+            path,
+            json={
+                "content": content,
+                "message_type": message_type,
+                "content_attributes": {"bot_mirror": True},
+            },
+        )
         r.raise_for_status()
         log.info(
             "chatwoot.post_message.ok",

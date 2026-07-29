@@ -74,7 +74,11 @@ async def test_post_message_incoming_calls_correct_path(
     call_args = stub_http.post.call_args
     # First positional arg is the path
     assert "/conversations/42/messages" in call_args[0][0]
-    assert call_args[1]["json"] == {"content": "hola", "message_type": "incoming"}
+    assert call_args[1]["json"] == {
+        "content": "hola",
+        "message_type": "incoming",
+        "content_attributes": {"bot_mirror": True},
+    }
 
 
 # ---------------------------------------------------------------------------
