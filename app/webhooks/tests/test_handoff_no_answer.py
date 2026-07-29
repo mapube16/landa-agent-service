@@ -139,7 +139,7 @@ async def test_happy_path_creates_case_and_sends_template(
         PHONE,
         "voice_no_answer_followup",
         "es",
-        body_params=[],
+        body_params=["Juan"],
         quick_reply_payloads=["si_ayudenme", "mas_tarde"],
     )
     assert session.commits == 1

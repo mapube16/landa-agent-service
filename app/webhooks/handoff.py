@@ -122,7 +122,9 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
         body.phone,
         settings.payment.template_no_answer_name,
         "es",
-        body_params=[],
+        # Informe técnico §7 Mensaje 1: "Hola, {{1}} 👋" — the template takes
+        # exactly one positional body param (cliente_nombre).
+        body_params=[body.cliente_nombre],
         quick_reply_payloads=["si_ayudenme", "mas_tarde"],
     )
     log.info(
