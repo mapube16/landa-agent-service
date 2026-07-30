@@ -7,6 +7,16 @@ from datetime import UTC, date
 from app.features.metrics.daily import day_range_utc, summarize
 
 
+def test_today_co_is_colombia_date() -> None:
+    """today_co anchors to UTC-5 so 'hoy' matches the working day, not UTC."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.features.metrics.daily import today_co
+
+    expected = datetime.now(timezone(timedelta(hours=-5))).date()
+    assert today_co() == expected
+
+
 def test_day_range_is_colombia_local_in_utc() -> None:
     """A Colombia day starts at 05:00 UTC (UTC-5) and spans 24h."""
     start, end = day_range_utc(date(2026, 7, 29))

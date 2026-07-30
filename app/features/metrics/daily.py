@@ -47,6 +47,17 @@ _LABEL_METRICS = {
 }
 
 
+def today_co() -> date:
+    """Today's calendar date in Colombia (UTC-5).
+
+    The server runs in UTC; ``datetime.now().date()`` there flips to the next
+    day at 19:00 Colombia time, so "hoy" would show an empty next-day report
+    all evening. Anchoring to the Colombia offset keeps "hoy" = the day the
+    team is actually working.
+    """
+    return datetime.now(_CO_OFFSET).date()
+
+
 def day_range_utc(d: date) -> tuple[datetime, datetime]:
     """[start, end) of the Colombia-local calendar day ``d``, as UTC datetimes."""
     start_local = datetime.combine(d, time.min, tzinfo=_CO_OFFSET)

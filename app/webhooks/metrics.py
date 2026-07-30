@@ -10,7 +10,7 @@ which the voice side already holds — no new secret to coordinate.
 from __future__ import annotations
 
 import hmac
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any
 
 import structlog
@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 
 from app.config.settings import settings
-from app.features.metrics.daily import day_range_utc, summarize
+from app.features.metrics.daily import day_range_utc, summarize, today_co
 from app.security.audit_log import AuditLog
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
@@ -92,7 +92,7 @@ async def daily_metrics(
     consumers omit it.
     """
     try:
-        d = date.fromisoformat(day) if day else datetime.now(UTC).astimezone().date()
+        d = date.fromisoformat(day) if day else today_co()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="day must be YYYY-MM-DD") from exc
 
@@ -114,7 +114,7 @@ async def dashboard(request: Request) -> HTMLResponse:
 
     from app.features.metrics.dashboard import render_dashboard
 
-    d = datetime.now(UTC).astimezone().date()
+    d = today_co()
 
     # Cache the audited metrics ~10 min in Redis: the dashboard is opened by
     # up to 5 agents repeatedly, and the LLM audit costs tokens on every
