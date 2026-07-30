@@ -239,7 +239,16 @@ async def receive(request: Request) -> dict[str, Any]:
         return {"ignored": "malformed"}
 
     # Agent resolved the conversation → re-activate the bot (mute unwind).
-    if payload.get("event") == "conversation_resolved":
+    # Chatwoot NO usa un evento "conversation_resolved": la resolución llega
+    # como "conversation_status_changed" (o "conversation_updated") con
+    # status="resolved". Buscar solo "conversation_resolved" dejaba el bot
+    # muteado PARA SIEMPRE tras cada handoff humano (bug live 2026-07-29).
+    cw_event = payload.get("event")
+    status = payload.get("status") or (payload.get("conversation") or {}).get("status")
+    is_resolution = cw_event == "conversation_resolved" or (
+        cw_event in {"conversation_status_changed", "conversation_updated"} and status == "resolved"
+    )
+    if is_resolution:
         conv_id = payload.get("id") or (payload.get("conversation") or {}).get("id")
         if conv_id is not None:
             phone = await request.app.state.chatwoot.get_phone_by_conv(int(conv_id))
@@ -247,12 +256,16 @@ async def receive(request: Request) -> dict[str, Any]:
                 from app.features.escalation.mute import clear_muted
 
                 await clear_muted(request.app.state.redis, phone)
+                log.info("chatwoot.webhook.unmuted", conv_id=int(conv_id))
                 return {"ok": "unmuted"}
         return {"ignored": "resolved_no_phone"}
 
     reason = _filter_reason(payload)
     if reason is not None:
-        log.info("chatwoot.webhook.ignored", reason=reason)
+        # Log the raw event name on "event" ignores — without it we could not
+        # tell WHICH event Chatwoot sent (needed to diagnose the resolution
+        # event-name mismatch, 2026-07-29).
+        log.info("chatwoot.webhook.ignored", reason=reason, cw_event=payload.get("event"))
         return {"ignored": reason}
 
     raw_msg_id = payload.get("id")

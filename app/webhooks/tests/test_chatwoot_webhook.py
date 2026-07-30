@@ -180,6 +180,37 @@ async def test_conversation_resolved_unmutes_bot(
     meta.send_text.assert_not_called()
 
 
+async def test_conversation_status_changed_resolved_unmutes_bot(
+    client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
+) -> None:
+    """El evento REAL de Chatwoot al resolver es conversation_status_changed
+    con status=resolved (NO 'conversation_resolved'). Buscar solo el nombre
+    viejo dejaba el bot muteado para siempre tras cada handoff (bug live
+    2026-07-29)."""
+    meta, chatwoot, redis = mocks
+    chatwoot.get_phone_by_conv.return_value = "+573001112233"
+    body = _payload(event="conversation_status_changed", status="resolved", id=42)
+    r = await client.post(
+        "/webhooks/chatwoot", content=body, headers={"X-Chatwoot-Signature": _sign(body)}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": "unmuted"}
+    redis.delete.assert_awaited_once_with(b"bot:muted:+573001112233")
+
+
+async def test_conversation_status_changed_open_does_not_unmute(
+    client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
+) -> None:
+    """Un cambio de status a 'open' (reabrir) NO debe des-mutear."""
+    _, _, redis = mocks
+    body = _payload(event="conversation_status_changed", status="open", id=42)
+    r = await client.post(
+        "/webhooks/chatwoot", content=body, headers={"X-Chatwoot-Signature": _sign(body)}
+    )
+    assert r.status_code == 200
+    redis.delete.assert_not_awaited()
+
+
 async def test_ignores_bot_mirror_attribute(
     client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
 ) -> None:
