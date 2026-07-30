@@ -260,6 +260,10 @@ def _retry_or_escalate(doc_retries: int, text: str) -> dict[str, Any]:
         "node": "awaiting_identification",
         "doc_retries": doc_retries + 1,
         "cliente_doc": text,
+        # asked_for_doc=True: si veníamos de un handoff_doc que falló, el
+        # próximo mensaje se trata como documento tecleado (evita reintentar
+        # en bucle el mismo doc del handoff).
+        "asked_for_doc": True,
         "messages": [AIMessage(content=T_02)],
     }
 
@@ -291,12 +295,19 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
             ],
         }
 
+    # Handoff CON documento: la voz ya nos dio la cédula (llamó a esta persona
+    # por su póliza). NO se lo volvemos a pedir — identificamos directo con ese
+    # documento (decisión cliente 2026-07-29). ``handoff_doc`` solo se consume
+    # en el PRIMER turno (antes de asked_for_doc); tras identificar, el flujo
+    # normal toma el control.
+    handoff_doc = state.get("cliente_doc") if not state.get("asked_for_doc") else None
+
     # First contact or no document requested yet → emit T-01 and wait.
     # Handoff context (voice call about a known poliza): greet WITH context
     # so the client understands why we ask for their document — a cold T-01
     # right after "te llamamos por tu póliza" read as a non-sequitur
     # (observed live 2026-07-29).
-    if not state.get("asked_for_doc"):
+    if not state.get("asked_for_doc") and not handoff_doc:
         handoff_numero = state.get("handoff_numero_poliza")
         if handoff_numero:
             nombre = state.get("cliente_nombre") or ""
@@ -319,6 +330,10 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
             "messages": [AIMessage(content=greeting)],
         }
 
+    # Con handoff_doc (voz ya nos dio la cédula), identificamos con ESE
+    # documento en vez del texto que escriba el cliente en su primer mensaje.
+    doc_input = str(handoff_doc) if handoff_doc else text
+
     try:
         client = get_softseguros_client()
         # Step 1: get cliente by documento — try normalized variants so a
@@ -326,7 +341,7 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
         # (requisito DPG; DV computed with the standard DIAN algorithm).
         cliente_id: int | None = None
         last_404: Exception | None = None
-        for candidate in _documento_candidates(text):
+        for candidate in _documento_candidates(doc_input):
             try:
                 cliente = await client.get_clientes_by_documento(candidate)
             except Exception as lookup_exc:  # noqa: BLE001
@@ -379,6 +394,9 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
             )
             return {
                 "node": "awaiting_identification",
+                # Si el handoff_doc dio 404, el próximo mensaje es un documento
+                # tecleado a mano (no reintentar el mismo del handoff).
+                "asked_for_doc": True,
                 "messages": [
                     AIMessage(
                         content=body_404,
@@ -395,12 +413,12 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
             }
 
         # Any other error (5xx, timeout, network) = system issue → escalate after 1 retry
-        return _retry_or_escalate(state.get("doc_retries", 0), text)
+        return _retry_or_escalate(state.get("doc_retries", 0), doc_input)
 
     n = len(polizas)
 
     if n == 0:
-        return _retry_or_escalate(state.get("doc_retries", 0), text)
+        return _retry_or_escalate(state.get("doc_retries", 0), doc_input)
 
     if n == 1:
         p = polizas[0]
@@ -409,17 +427,37 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
         return {
             "node": "answering_qa",
             "poliza_id": poliza_id,
-            "cliente_doc": text,
+            "cliente_doc": doc_input,
             "polizas_list": polizas,
             "messages": [_qa_menu_message(numero)],
         }
+
+    # Handoff nombró una póliza específica: si está entre las del cliente,
+    # lockeamos directo a ella (la voz llamó por ESA póliza) — sin lista.
+    hint = state.get("handoff_poliza_hint") if handoff_doc else None
+    if hint:
+        hint_num = re.sub(r"(?i)^POL-", "", str(hint)).strip().lstrip("0")
+        match = next(
+            (p for p in polizas if str(p.get("numero_poliza", "")).lstrip("0") == hint_num),
+            None,
+        )
+        if match is not None:
+            poliza_id = str(match.get("id", match.get("numero_poliza", "")))
+            numero = match.get("numero_poliza", poliza_id)
+            return {
+                "node": "answering_qa",
+                "poliza_id": poliza_id,
+                "cliente_doc": doc_input,
+                "polizas_list": polizas,
+                "messages": [_qa_menu_message(numero)],
+            }
 
     # N >= 2 — interactive list (Meta limits 10 rows; we page in chunks of 9).
     return {
         "node": "awaiting_policy_choice",
         "polizas_list": polizas,
         "polizas_page": 0,
-        "cliente_doc": text,
+        "cliente_doc": doc_input,
         "messages": [_polizas_list_message(polizas, page=0)],
     }
 

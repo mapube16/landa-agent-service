@@ -75,6 +75,61 @@ async def test_node_identify_repeat_template_tap_not_treated_as_document() -> No
 
 
 @pytest.mark.asyncio
+async def test_node_identify_handoff_doc_never_asks_for_document() -> None:
+    """Handoff con cliente_doc: identifica con ese doc sin pedirlo (primer tap)."""
+    from app.features.qa.nodes import node_identify
+
+    polizas = [
+        {"id": 1, "numero_poliza": "11111", "ramo_nombre": "AUTO"},
+        {"id": 2, "numero_poliza": "22222", "ramo_nombre": "VIDA"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 7})
+    mock_client.get_polizas_by_cliente = AsyncMock(return_value=polizas)
+
+    # Primer turno: el cliente tocó "si_ayudenme", asked_for_doc aún False,
+    # pero cliente_doc viene sembrado del handoff.
+    state = _make_state(
+        messages=[HumanMessage(content="si_ayudenme")],
+        asked_for_doc=False,
+        cliente_doc="41942034",
+    )
+    with patch("app.features.qa.nodes.get_softseguros_client", return_value=mock_client):
+        result = await node_identify(state)  # type: ignore[arg-type]
+
+    # NO pidió documento: identificó y mostró la lista de pólizas del cliente.
+    assert result["node"] == "awaiting_policy_choice"
+    assert len(result["polizas_list"]) == 2
+    mock_client.get_clientes_by_documento.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_node_identify_handoff_doc_with_poliza_hint_locks_directly() -> None:
+    """Handoff con doc + póliza específica que existe: entra directo a esa póliza."""
+    from app.features.qa.nodes import node_identify
+
+    polizas = [
+        {"id": 1, "numero_poliza": "11111", "ramo_nombre": "AUTO"},
+        {"id": 2, "numero_poliza": "232846", "ramo_nombre": "EXEQUIAS"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 7})
+    mock_client.get_polizas_by_cliente = AsyncMock(return_value=polizas)
+
+    state = _make_state(
+        messages=[HumanMessage(content="si_ayudenme")],
+        asked_for_doc=False,
+        cliente_doc="41942034",
+        handoff_poliza_hint="POL-232846",
+    )
+    with patch("app.features.qa.nodes.get_softseguros_client", return_value=mock_client):
+        result = await node_identify(state)  # type: ignore[arg-type]
+
+    assert result["node"] == "answering_qa"
+    assert result["poliza_id"] == "2"
+
+
+@pytest.mark.asyncio
 async def test_node_identify_zero_polizas_first_attempt_retries() -> None:
     from app.features.qa.messages import T_02
     from app.features.qa.nodes import node_identify

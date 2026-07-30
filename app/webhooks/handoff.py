@@ -191,27 +191,13 @@ async def _seed_qa_thread(request: Request, body: NoAnswerHandoff) -> None:
     }
 
     if body.documento:
-        try:
-            from app.integrations.softseguros import get_softseguros_client
-
-            client = get_softseguros_client()
-            cliente = await client.get_clientes_by_documento(body.documento)
-            cliente_id = cliente.get("id") if isinstance(cliente, dict) else None
-            if cliente_id is not None:
-                polizas = await client.get_polizas_by_cliente(int(cliente_id))
-                match = next(
-                    (p for p in polizas if str(p.get("numero_poliza", "")) == body.numero_poliza),
-                    None,
-                )
-                if match is not None:
-                    seed["poliza_id"] = str(match.get("id", match.get("numero_poliza")))
-                    seed["cliente_doc"] = body.documento
-        except Exception as exc:  # noqa: BLE001
-            # Fail-open: fall back to the contextual-greeting seed only.
-            log.warning(
-                "handoff.no_answer.poliza_resolve_failed",
-                error_type=type(exc).__name__,
-            )
+        # La voz llamó a esta persona por su póliza: YA tenemos su documento,
+        # NO debemos volver a pedírselo (decisión cliente 2026-07-29). Seedeamos
+        # cliente_doc + handoff_poliza_hint; node_identify los usa al primer
+        # mensaje para identificar directo (documento) y lockear la póliza del
+        # payload si aparece — sin preguntar nada.
+        seed["cliente_doc"] = body.documento
+        seed["handoff_poliza_hint"] = body.numero_poliza
 
     try:
         await qa_graph.aupdate_state(

@@ -126,25 +126,18 @@ async def test_seed_without_documento_sets_context_only(
     assert "poliza_id" not in values
 
 
-async def test_seed_with_documento_locks_poliza(
+async def test_seed_with_documento_seeds_doc_and_hint(
     client: AsyncClient,
     meta: MagicMock,
     session: _FakeSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """documento present → resolve via SoftSeguros and seed poliza_id."""
-    import app.integrations.softseguros as ss_mod
+    """documento present → seed cliente_doc + handoff_poliza_hint.
 
-    ss = MagicMock()
-    ss.get_clientes_by_documento = AsyncMock(return_value={"id": 77})
-    ss.get_polizas_by_cliente = AsyncMock(
-        return_value=[
-            {"id": 999, "numero_poliza": "otra"},
-            {"id": 1234, "numero_poliza": "12345"},
-        ]
-    )
-    monkeypatch.setattr(ss_mod, "get_softseguros_client", lambda: ss)
-
+    La identificación real (documento -> cliente -> pólizas) ya NO ocurre en
+    el handoff sino en node_identify al primer mensaje, para que el bot nunca
+    pida el documento (decisión cliente 2026-07-29). El handoff solo pasa el
+    contexto.
+    """
     qa_graph = MagicMock()
     qa_graph.aupdate_state = AsyncMock()
     transport = client._transport  # type: ignore[attr-defined]
@@ -154,9 +147,8 @@ async def test_seed_with_documento_locks_poliza(
     assert r.status_code == 200
 
     values = qa_graph.aupdate_state.await_args.kwargs["values"]
-    assert values["poliza_id"] == "1234"
     assert values["cliente_doc"] == "18496452"
-    ss.get_clientes_by_documento.assert_awaited_once_with("18496452")
+    assert values["handoff_poliza_hint"] == "12345"
 
 
 async def test_missing_bearer_returns_401(client: AsyncClient, meta: MagicMock) -> None:
