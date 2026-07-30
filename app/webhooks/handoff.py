@@ -275,10 +275,6 @@ async def case_handoff(body: CaseHandoff, request: Request) -> dict[str, str | b
 
         await mirror_outgoing_to_chatwoot(body.phone, body.message)
 
-        from app.features.payment.nodes import mirror_outgoing_to_chatwoot
-
-        await mirror_outgoing_to_chatwoot(body.phone, body.message)
-
     audit_log.emit_task(
         action="handoff_received",
         actor="voice",
