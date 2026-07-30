@@ -277,6 +277,20 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
     """
     text = _last_human_text(state)
 
+    # Un re-tap del botón de la plantilla ("si_ayudenme"/"mas_tarde") NO es un
+    # documento: si la conversación ya arrancó (asked_for_doc), ignóralo y
+    # vuelve a pedir el documento en vez de buscar un cliente con ese payload
+    # (observado live 2026-07-29: doble tap => "no encontré cliente").
+    if state.get("asked_for_doc") and text.strip().lower() in {"si_ayudenme", "mas_tarde"}:
+        return {
+            "node": "awaiting_identification",
+            "messages": [
+                AIMessage(
+                    content="Sigo por acá. ¿Me compartes tu número de documento para continuar?"
+                )
+            ],
+        }
+
     # First contact or no document requested yet → emit T-01 and wait.
     # Handoff context (voice call about a known poliza): greet WITH context
     # so the client understands why we ask for their document — a cold T-01
@@ -287,9 +301,14 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
         if handoff_numero:
             nombre = state.get("cliente_nombre") or ""
             saludo = f"¡Hola{', ' + nombre if nombre else ''}! 👋 "
+            # numero_poliza del handoff puede venir con o sin prefijo "POL-"
+            # (lo manda la voz); no lo dupliquemos.
+            numero_fmt = str(handoff_numero)
+            if not re.match(r"(?i)^POL-", numero_fmt):
+                numero_fmt = f"POL-{numero_fmt}"
             greeting = (
                 f"{saludo}Soy ARIA, el asistente virtual de DPG Seguros. Te escribimos "
-                f"por tu póliza POL-{handoff_numero}. Para confirmar tu identidad "
+                f"por tu póliza {numero_fmt}. Para confirmar tu identidad "
                 "y mostrarte la información, ¿me das tu número de documento?"
             )
         else:

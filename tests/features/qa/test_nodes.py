@@ -50,6 +50,31 @@ async def test_node_identify_empty_message_returns_greeting() -> None:
 
 
 @pytest.mark.asyncio
+async def test_node_identify_handoff_greeting_no_double_pol_prefix() -> None:
+    """handoff_numero_poliza que ya trae 'POL-' no debe duplicarse a 'POL-POL-'."""
+    from app.features.qa.nodes import node_identify
+
+    state = _make_state(messages=[], asked_for_doc=False, handoff_numero_poliza="POL-12345")
+    result = await node_identify(state)  # type: ignore[arg-type]
+    content = str(result["messages"][0].content)
+    assert "POL-POL-" not in content
+    assert "POL-12345" in content
+
+
+@pytest.mark.asyncio
+async def test_node_identify_repeat_template_tap_not_treated_as_document() -> None:
+    """Un segundo tap de 'si_ayudenme' no debe buscarse como documento."""
+    from app.features.qa.nodes import node_identify
+
+    state = _make_state(messages=[HumanMessage(content="si_ayudenme")], asked_for_doc=True)
+    # Si esto llamara a SoftSeguros, el mock ausente reventaría; el fix
+    # debe cortar antes de cualquier lookup.
+    result = await node_identify(state)  # type: ignore[arg-type]
+    assert result["node"] == "awaiting_identification"
+    assert "documento" in str(result["messages"][0].content).lower()
+
+
+@pytest.mark.asyncio
 async def test_node_identify_zero_polizas_first_attempt_retries() -> None:
     from app.features.qa.messages import T_02
     from app.features.qa.nodes import node_identify
