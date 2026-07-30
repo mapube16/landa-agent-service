@@ -425,6 +425,17 @@ class ChatwootClient:
         r.raise_for_status()
         log.info("chatwoot.conv.resolved", conv_id=conversation_id)
 
+    async def snooze(self, conversation_id: int) -> None:
+        """Posponer una conversación (sale del inbox hasta que el cliente escriba).
+
+        Lo usa el barrido de ``sin-respuesta``: un hilo se archiva SOLO cuando
+        de verdad pasaron horas sin respuesta, no al crearlo.
+        """
+        path = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/toggle_status"
+        r = await self._http.post(path, json={"status": "snoozed"})
+        r.raise_for_status()
+        log.info("chatwoot.conv.snoozed", conv_id=conversation_id)
+
     async def list_conversations(self, *, since_epoch: float | None = None) -> list[dict[str, Any]]:
         """Return all conversations (status=all), newest activity first.
 

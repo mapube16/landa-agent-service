@@ -190,6 +190,63 @@ async def process_attachment(
     await graph.ainvoke(values, config=config)
 
 
+#: Horas de gracia antes de dar una conversación por "sin respuesta".
+UNANSWERED_AFTER_HOURS = 5
+
+
+async def mark_unanswered_conversations(ctx: dict[str, Any]) -> None:
+    """Cada 15 min: etiqueta ``sin-respuesta`` + pospone los hilos que llevan
+    más de ``UNANSWERED_AFTER_HOURS`` sin que el cliente conteste.
+
+    Antes esto lo hacía la automatización nativa de Chatwoot al CREAR la
+    conversación, lo que traía dos problemas (30-jul): el equipo no veía los
+    hilos nuevos —salían del inbox antes de que el cliente alcanzara a leer— y
+    la métrica ``conv_sin_respuesta`` contaba TODAS las conversaciones del día.
+    Ahora el hilo se ve desde el primer momento y solo se archiva si de verdad
+    pasaron las horas sin respuesta.
+
+    Idempotente: salta las que ya tienen la etiqueta. Fail-soft por
+    conversación — un fallo puntual no aborta el barrido.
+    """
+    import time
+
+    import structlog as _structlog
+
+    from app.integrations.chatwoot import get_chatwoot_client
+
+    _log = _structlog.get_logger("worker.mark_unanswered")
+    cutoff = time.time() - UNANSWERED_AFTER_HOURS * 3600
+
+    try:
+        convs = await get_chatwoot_client().list_conversations()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("unanswered.list_failed", error_type=type(exc).__name__)
+        return
+
+    cw = get_chatwoot_client()
+    marked = 0
+    for c in convs:
+        conv_id = c.get("id")
+        if conv_id is None or c.get("status") == "resolved":
+            continue
+        if (c.get("created_at") or 0) > cutoff:
+            continue  # aún dentro de la ventana de gracia
+        if "sin-respuesta" in (c.get("labels") or []):
+            continue  # ya marcada en un barrido anterior
+        try:
+            # message_type 0 = incoming: el cliente sí escribió alguna vez.
+            msgs = await cw.list_messages(int(conv_id))
+            if any(m.get("message_type") == 0 for m in msgs):
+                continue
+            await cw.add_labels(int(conv_id), ["sin-respuesta"])
+            await cw.snooze(int(conv_id))
+            marked += 1
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("unanswered.conv_failed", conv_id=conv_id, error_type=type(exc).__name__)
+    if marked:
+        _log.info("unanswered.swept", marked=marked, horas=UNANSWERED_AFTER_HOURS)
+
+
 async def verify_audit_chain(ctx: dict[str, Any]) -> None:
     """Daily cron (03:00 UTC): verify the full audit log hash chain.
 
@@ -273,6 +330,7 @@ class WorkerSettings:
         process_attachment,
         check_pending_cases,
         cleanup_attachments_90d,
+        mark_unanswered_conversations,
         verify_audit_chain,
         sink_audit_log,
     ]
@@ -287,6 +345,9 @@ class WorkerSettings:
     cron_jobs: list[Any] = [
         cron(check_pending_cases, minute=set(range(60))),
         cron(cleanup_attachments_90d, hour={2}, minute={0}),
+        # Barrido de "sin respuesta" cada 15 min: el retardo real lo da la
+        # ventana de UNANSWERED_AFTER_HOURS, no la frecuencia del cron.
+        cron(mark_unanswered_conversations, minute={0, 15, 30, 45}),
         cron(verify_audit_chain, hour={3}, minute={0}),
         cron(sink_audit_log, hour={3}, minute={30}),
     ]
