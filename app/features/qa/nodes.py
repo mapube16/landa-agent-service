@@ -631,7 +631,7 @@ async def node_answer(state: QAState) -> dict[str, Any]:
     if judge_retries > 0 and last_rationale:
         sp += (
             f"\n\nLa respuesta anterior fue rechazada por el judge: {last_rationale}."
-            " Reformulá sin incluir ese contenido."
+            " Reformula sin incluir ese contenido (recuerda: tuteo colombiano, nunca voseo)."
         )
 
     llm = get_llm("conversation").bind_tools(_TOOLS)

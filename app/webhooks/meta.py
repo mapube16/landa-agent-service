@@ -259,6 +259,28 @@ async def _send_outbound(app_state: Any, phone: str, msg: Any, wamid: str) -> No
             log.warning("qa_graph.mirror_outbound.failed", error_type=type(exc).__name__)
 
 
+async def _graph_failure_fallback(app_state: Any, phone: str, redis: Any) -> None:
+    """A graph crash used to leave the client in silence (QA gap 9.11).
+
+    Send a graceful message and escalate to a human so nobody is left hanging
+    on an internal error. Best-effort — the fallback itself must not raise.
+    """
+    try:
+        await app_state.meta.send_text(
+            to=phone,
+            body=(
+                "Tuvimos un inconveniente procesando tu mensaje. "
+                "Te estamos conectando con una persona del equipo. 🙏"
+            ),
+        )
+        if redis is not None:
+            from app.features.escalation.mute import set_escalated
+
+            await set_escalated(redis, phone)
+    except Exception as exc:  # noqa: BLE001
+        log.error("qa_graph.run_failed.fallback_failed", error_type=type(exc).__name__)
+
+
 async def _run_and_dispatch(
     *,
     app_state: Any,
@@ -298,6 +320,7 @@ async def _run_and_dispatch(
                 body=body,
                 url=url,
             )
+            await _graph_failure_fallback(app_state, phone, redis)
             return
 
         outbound_msg = _extract_outbound_message(final_state)

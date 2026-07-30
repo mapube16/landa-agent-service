@@ -49,13 +49,13 @@ T_03: str = (
 T_04: str = (
     "Encontré {N} pólizas a tu nombre:\n\n{lista_numerada}\n\n"
     "¿Sobre cuál quieres preguntar? "
-    "Respondé con el número o el número de póliza."
+    "Responde con el número o el número de póliza."
 )
 
 T_05: str = (
     "Esta póliza no tiene esa información disponible"
     " o está fuera del alcance que puedo consultar."
-    " ¿Querés que te conecte con un agente?"
+    " ¿Quieres que te conecte con un agente?"
 )
 
 T_06: str = (
@@ -64,7 +64,7 @@ T_06: str = (
 )
 
 T_07: str = (
-    "Disculpá, no pude armar una respuesta clara a tu pregunta. Te conecto con un agente de DPG."
+    "Disculpa, no pude armar una respuesta clara a tu pregunta. Te conecto con un agente de DPG."
 )
 
 T_08: str = "Listo, te conecto con un agente de DPG. Un humano te va a contestar pronto acá mismo."
