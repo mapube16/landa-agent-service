@@ -190,7 +190,7 @@ class ChatwootClient:
             # Prefer reusing an existing open conversation over creating a new
             # one. Even with the lock, a different process / earlier deploy
             # may have left an open thread for this contact.
-            existing = await self._find_open_conversation(contact_id)
+            existing = await self._find_reusable_conversation(contact_id)
             if existing is not None:
                 conv_id = existing
                 log.info("chatwoot.conv.reused", phone_hash=phone_hash, conv_id=conv_id)
@@ -292,8 +292,16 @@ class ChatwootClient:
                 return cached
         return None
 
-    async def _find_open_conversation(self, contact_id: int) -> int | None:
-        """Return the most recent open conversation for ``contact_id``, or None."""
+    async def _find_reusable_conversation(self, contact_id: int) -> int | None:
+        """Return the most recent REUSABLE conversation for ``contact_id``, or None.
+
+        Reusable = cualquier estado que no sea ``resolved``. Antes se exigía
+        ``open`` y eso rompía el reuso: la automatización "Plantilla sin
+        respuesta" pospone (``snooze``) cada conversación al crearla, así que
+        el hilo existente nunca matcheaba y se creaba uno NUEVO por cada
+        handoff — observado 30-jul: 3 hilos del mismo cliente en 5 minutos.
+        Un hilo ``resolved`` sí abre uno nuevo: el caso anterior ya se cerró.
+        """
         path = f"/api/v1/accounts/{self._account_id}/contacts/{contact_id}/conversations"
         try:
             r = await self._http.get(path)
@@ -307,13 +315,17 @@ class ChatwootClient:
             return None
         # Response shape: {"payload": [{"id": <int>, "status": "open"|..., ...}]}
         payload = r.json().get("payload", [])
-        open_convs = [c for c in payload if c.get("status") == "open"]
-        if not open_convs:
+        reusables = [c for c in payload if c.get("status") != "resolved"]
+        if not reusables:
             return None
-        # Most recent open conversation -- Chatwoot returns sorted by created_at
-        # descending in the contacts endpoint; defensive sort in case it changes.
-        open_convs.sort(key=lambda c: c.get("created_at", 0), reverse=True)
-        return int(open_convs[0]["id"])
+        # Preferir un hilo abierto sobre uno pospuesto/pendiente; dentro de cada
+        # grupo, el más reciente. Chatwoot ya ordena por created_at desc en este
+        # endpoint; el sort es defensivo por si cambia.
+        reusables.sort(
+            key=lambda c: (c.get("status") == "open", c.get("created_at", 0)),
+            reverse=True,
+        )
+        return int(reusables[0]["id"])
 
     async def _create_or_get_contact(self, phone: str) -> int:
         """POST /contacts; on 422 duplicate, recover via GET /contacts/search.
