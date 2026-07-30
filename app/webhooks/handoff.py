@@ -54,6 +54,16 @@ class NoAnswerHandoff(BaseModel):
     documento: str | None = Field(default=None, max_length=20)
 
 
+class LinkCuponRequest(NoAnswerHandoff):
+    """El cliente pidió link o cupón de pago durante la llamada (informe §7).
+
+    Hereda el contrato de ``NoAnswerHandoff`` (mismo phone/nombre/póliza/caso y
+    el ``documento`` opcional que siembra el hilo) y agrega qué pidió.
+    """
+
+    tipo: str = Field(default="link", pattern="^(link|cupon)$")
+
+
 class CaseHandoff(BaseModel):
     """Body contract for Contrato A (Fase 6) — VOICE cedes a live case to WA.
 
@@ -155,6 +165,51 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
     await _seed_qa_thread(request, body)
 
     return {"case_id": case_id, "sent": True}
+
+
+@router.post("/link_cupon", dependencies=[Depends(_verify_bearer)])
+async def link_cupon(body: LinkCuponRequest, request: Request) -> dict[str, str | bool]:
+    """Confirmar por WhatsApp que se registró la solicitud de link/cupón (§7).
+
+    Antes esto NO existía: en la llamada ARIA prometía "en unos momentos le
+    enviaremos el cupón", se alertaba a cartera y el cliente se quedaba sin
+    nada escrito. Ahora recibe la plantilla ``solicitud_link_cupon`` — plantilla
+    y no texto libre porque justo después de una llamada la ventana de 24h está
+    cerrada.
+
+    NO es idempotente por case_id a propósito: si el cliente pide el cupón en
+    dos llamadas distintas, ambas confirmaciones son legítimas. La tool de voz
+    dispara una sola vez por solicitud.
+    """
+    await _check_handoff_rate_limit(request, body.phone)
+
+    meta = request.app.state.meta
+    tipo_txt = "cupón" if body.tipo == "cupon" else "link"
+
+    await meta.send_template(
+        body.phone,
+        "solicitud_link_cupon",
+        "es",
+        body_params=[body.cliente_nombre, tipo_txt],
+    )
+    log.info(
+        "link_cupon.template_sent",
+        case_id=str(body.case_id),
+        tipo=body.tipo,
+        phone_hash=_hash_phone(body.phone),
+    )
+
+    # Traza en Chatwoot para que el equipo sepa que hay un envío pendiente.
+    from app.features.payment.nodes import mirror_outgoing_to_chatwoot
+
+    await mirror_outgoing_to_chatwoot(
+        body.phone,
+        f"[ARIA confirmó por WhatsApp la solicitud de {tipo_txt} de pago — "
+        f"cartera debe enviar el {tipo_txt} real por este chat]",
+    )
+
+    await _seed_qa_thread(request, body)
+    return {"case_id": str(body.case_id), "sent": True}
 
 
 async def _seed_qa_thread(request: Request, body: NoAnswerHandoff) -> None:
