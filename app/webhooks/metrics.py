@@ -15,6 +15,7 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 
 from app.config.settings import settings
@@ -35,26 +36,9 @@ def _verify_bearer(authorization: str | None = Header(None)) -> None:
         raise HTTPException(status_code=401, detail="invalid bearer")
 
 
-@router.get("/daily", dependencies=[Depends(_verify_bearer)])
-async def daily_metrics(
-    request: Request,
-    day: str = Query(default="", description="YYYY-MM-DD, Colombia day; default today"),
-    audit: bool = Query(default=False, description="Run the LLM quality auditor (costs tokens)"),
-) -> dict[str, object]:
-    """Return the day's WhatsApp metrics (audit-log counts + Chatwoot labels).
-
-    With ``audit=true``, additionally runs the LLM quality auditor over
-    conversations that had real client activity and includes anomaly counts
-    (intento de certificar pago, listas rotas, loops, frustración). Opt-in
-    because it spends LLM tokens — the nightly report asks for it; cheap
-    consumers omit it.
-    """
-    try:
-        d = date.fromisoformat(day) if day else datetime.now(UTC).astimezone().date()
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="day must be YYYY-MM-DD") from exc
-
-    start, end = day_range_utc(d)
+async def _compute_daily_metrics(request: Request, d: date, audit: bool) -> dict[str, Any]:
+    """Compute the day's metrics (shared by the JSON endpoint and the HTML dashboard)."""
+    start, _end = day_range_utc(d)
 
     # 1. audit_log action counts within the day (fail-soft to empty).
     action_counts: dict[str, int] = {}
@@ -63,7 +47,7 @@ async def daily_metrics(
         async with session_factory() as session:
             rows = await session.execute(
                 select(AuditLog.action, func.count())
-                .where(AuditLog.created_at >= start, AuditLog.created_at < end)
+                .where(AuditLog.created_at >= start, AuditLog.created_at < _end)
                 .group_by(AuditLog.action)
             )
             action_counts = {action: n for action, n in rows.all()}
@@ -90,9 +74,71 @@ async def daily_metrics(
 
     if audit and chatwoot is not None:
         metrics.update(await _run_quality_audit(chatwoot, start.timestamp()))
+    return metrics
 
+
+@router.get("/daily", dependencies=[Depends(_verify_bearer)])
+async def daily_metrics(
+    request: Request,
+    day: str = Query(default="", description="YYYY-MM-DD, Colombia day; default today"),
+    audit: bool = Query(default=False, description="Run the LLM quality auditor (costs tokens)"),
+) -> dict[str, object]:
+    """Return the day's WhatsApp metrics (audit-log counts + Chatwoot labels).
+
+    With ``audit=true``, additionally runs the LLM quality auditor over
+    conversations that had real client activity and includes anomaly counts
+    (intento de certificar pago, listas rotas, loops, frustración). Opt-in
+    because it spends LLM tokens — the nightly report asks for it; cheap
+    consumers omit it.
+    """
+    try:
+        d = date.fromisoformat(day) if day else datetime.now(UTC).astimezone().date()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="day must be YYYY-MM-DD") from exc
+
+    metrics = await _compute_daily_metrics(request, d, audit)
     log.info("metrics.daily.served", fecha=d.isoformat(), audited=audit)
     return metrics
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request) -> HTMLResponse:
+    """Agent-facing KPI page, embedded as a Chatwoot Dashboard App (iframe).
+
+    No bearer: Chatwoot loads this in the agent's browser. Safe because it
+    returns ONLY server-computed aggregate counts (no PII, no secret, no JS
+    calling a protected API — the numbers are baked into the HTML here).
+    Runs the quality audit so the agent sees calidad too (client decision).
+    """
+    import orjson
+
+    from app.features.metrics.dashboard import render_dashboard
+
+    d = datetime.now(UTC).astimezone().date()
+
+    # Cache the audited metrics ~10 min in Redis: the dashboard is opened by
+    # up to 5 agents repeatedly, and the LLM audit costs tokens on every
+    # recompute. Fail-open — no Redis, just recompute.
+    redis = getattr(request.app.state, "redis", None)
+    cache_key = f"metrics:dashboard:{d.isoformat()}".encode()
+    metrics: dict[str, Any] | None = None
+    if redis is not None:
+        try:
+            cached = await redis.get(cache_key)
+            if cached:
+                metrics = orjson.loads(cached)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("metrics.dashboard.cache_read_failed", error_type=type(exc).__name__)
+
+    if metrics is None:
+        metrics = await _compute_daily_metrics(request, d, audit=True)
+        if redis is not None:
+            try:
+                await redis.set(cache_key, orjson.dumps(metrics), ex=600)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("metrics.dashboard.cache_write_failed", error_type=type(exc).__name__)
+
+    return HTMLResponse(content=render_dashboard(metrics))
 
 
 async def _run_quality_audit(chatwoot: Any, since_epoch: float) -> dict[str, int]:

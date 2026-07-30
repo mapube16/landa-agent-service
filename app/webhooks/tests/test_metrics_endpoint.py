@@ -112,6 +112,20 @@ async def test_audit_flag_runs_quality_auditor(client: AsyncClient, monkeypatch:
     assert body["conversaciones_auditadas"] >= 1
 
 
+async def test_dashboard_serves_html_without_bearer(client: AsyncClient, monkeypatch: Any) -> None:
+    """The Dashboard App page renders server-side, no bearer, no secret exposed."""
+    app_state = client._transport.app.state  # type: ignore[attr-defined]
+    app_state.chatwoot.list_messages = AsyncMock(return_value=[])
+    app_state.redis = None  # skip cache path
+
+    r = await client.get("/metrics/dashboard")  # no auth header
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "Operación WhatsApp" in r.text
+    # No secret leaked into the page.
+    assert "Bearer" not in r.text and "test-lambda-token" not in r.text
+
+
 async def test_chatwoot_down_still_returns_audit(client: AsyncClient) -> None:
     """A Chatwoot outage must not 500 the endpoint — audit metrics still serve."""
     client._transport.app.state.chatwoot.list_conversations.side_effect = RuntimeError("down")  # type: ignore[attr-defined]
