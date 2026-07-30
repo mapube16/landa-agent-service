@@ -269,8 +269,6 @@ async def receive(request: Request) -> dict[str, Any]:
         or (payload.get("conversation") or {}).get("status")
         or _status_from_changed_attributes(payload)
     )
-    if cw_event in {"conversation_status_changed", "conversation_updated", "conversation_resolved"}:
-        log.info("chatwoot.webhook.status_event", cw_event=cw_event, status=status)
     is_resolution = cw_event == "conversation_resolved" or (
         cw_event in {"conversation_status_changed", "conversation_updated"} and status == "resolved"
     )
