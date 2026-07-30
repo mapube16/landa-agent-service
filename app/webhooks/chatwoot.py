@@ -129,6 +129,24 @@ async def _relay_attachments(
             await anyio.Path(tmp.name).unlink(missing_ok=True)
 
 
+def _status_from_changed_attributes(payload: dict[str, Any]) -> str | None:
+    """Extract the new status from Chatwoot's ``changed_attributes``.
+
+    ``conversation_updated`` carries changes as a list, e.g.
+    ``[{"status": {"current_value": "resolved", "previous_value": "open"}}]``.
+    """
+    changed = payload.get("changed_attributes")
+    if not isinstance(changed, list):
+        return None
+    for entry in changed:
+        if isinstance(entry, dict) and "status" in entry:
+            val = entry["status"]
+            if isinstance(val, dict):
+                cur = val.get("current_value")
+                return str(cur) if cur is not None else None
+    return None
+
+
 def _filter_reason(payload: dict[str, Any]) -> str | None:
     """Return the ignore-reason for a non-relayable event, or None to proceed.
 
@@ -244,7 +262,15 @@ async def receive(request: Request) -> dict[str, Any]:
     # status="resolved". Buscar solo "conversation_resolved" dejaba el bot
     # muteado PARA SIEMPRE tras cada handoff humano (bug live 2026-07-29).
     cw_event = payload.get("event")
-    status = payload.get("status") or (payload.get("conversation") or {}).get("status")
+    # El status puede venir en distintos sitios según el evento de Chatwoot:
+    # top-level, dentro de "conversation", o en "changed_attributes".
+    status = (
+        payload.get("status")
+        or (payload.get("conversation") or {}).get("status")
+        or _status_from_changed_attributes(payload)
+    )
+    if cw_event in {"conversation_status_changed", "conversation_updated", "conversation_resolved"}:
+        log.info("chatwoot.webhook.status_event", cw_event=cw_event, status=status)
     is_resolution = cw_event == "conversation_resolved" or (
         cw_event in {"conversation_status_changed", "conversation_updated"} and status == "resolved"
     )
