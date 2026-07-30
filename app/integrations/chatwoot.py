@@ -156,6 +156,13 @@ class ChatwootClient:
         422 on duplicate contact is recovered via GET /contacts/search (Chatwoot
         Application API is not always idempotent on contact creation).
         """
+        # Normalizar ANTES de derivar la cache key. El webhook de Meta entrega
+        # el teléfono SIN '+' y el handoff CON '+': derivando la key del string
+        # crudo, el mismo cliente tenía DOS entradas de caché -> dos hilos, y
+        # los mensajes del bot caían en uno mientras las plantillas caían en
+        # otro (visto 30-jul: JULIAN con #92/#93/#94, un mensaje en cada uno).
+        # El contacto ya se normalizaba en _create_or_get_contact; faltaba aquí.
+        phone = phone if phone.startswith("+") else f"+{phone}"
         phone_hash = _hash_phone(phone)
         cache_key = f"chatwoot:conv:{phone_hash}".encode()
         lock_key = f"chatwoot:lock:{phone_hash}".encode()
