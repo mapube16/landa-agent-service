@@ -431,11 +431,19 @@ async def receive(request: Request) -> Response:
             # 4a. Status updates — acknowledge only (D-05).
             if value.statuses is not None:
                 for status in value.statuses:
+                    # status="failed" trae errors[] con code/title/details — sin
+                    # eso un fallo de entrega es indiagnosticable desde los logs.
+                    errs = status.get("errors") or []
                     log.info(
                         "webhook.status.received",
                         status=status.get("status"),
                         recipient_hash=_hash_phone(str(status.get("recipient_id", ""))),
                         result="status_received",
+                        error_code=errs[0].get("code") if errs else None,
+                        error_title=errs[0].get("title") if errs else None,
+                        error_details=(errs[0].get("error_data") or {}).get("details")
+                        if errs
+                        else None,
                     )
                 continue
 
