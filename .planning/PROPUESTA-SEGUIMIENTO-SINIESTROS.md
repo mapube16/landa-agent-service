@@ -194,6 +194,15 @@ python scripts/broadcast_siniestros.py send seguimiento lista_terremoto.csv --li
 python scripts/broadcast_siniestros.py send deteccion lista_sin_info.csv --limit 10
 ```
 
+**Desplegado a produccion el 27-sep-2026** (web + worker, commits 5c4263b..8ad6764,
+CI en verde). Incluye la ventana de 24 h para mensajes del equipo
+(`app/features/escalation/window.py`): fuera de ventana el mensaje del agente se
+guarda, sale la plantilla `respuesta_pendiente_asesor` (APPROVED) con boton
+"Ver respuesta", y se entrega cuando el cliente responde. Cron diario
+`watch_pending_queues` avisa de colas con pendientes de 3+ dias. El Redis de
+Railway SI tiene volumen persistente (`redis-volume`, /data): las colas y mutes
+sobreviven reinicios.
+
 **Para activar la escritura**: `SINIESTROS_SYNC_APPLY=true` en Railway. Sin esa
 var el cron corre en silencioso y solo deja en el log lo que haria.
 
