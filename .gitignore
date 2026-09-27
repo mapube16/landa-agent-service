@@ -32,3 +32,15 @@ build/
 .DS_Store
 .idea/
 .vscode/
+
+# PII exports de SoftSeguros (one-off, nunca commitear)
+/segmento.csv*
+/lista_*.csv
+/siniestros.csv*
+/lista_terremoto.csv
+/all_polizas.json*
+/lista_sin_info.csv*
+/no_entregados.csv
+/siniestros.cruce.csv
+/lista_terremoto.csv.*
+/Informe_*.pdf

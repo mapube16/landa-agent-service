@@ -12,7 +12,7 @@ import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest  # type: ignore[import-not-found]
+import pytest
 
 from app.worker import UNANSWERED_AFTER_HOURS, mark_unanswered_conversations
 
@@ -34,7 +34,7 @@ async def _run(monkeypatch: Any, cw: MagicMock) -> None:
     await mark_unanswered_conversations({})
 
 
-@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+@pytest.mark.asyncio
 async def test_marca_la_que_lleva_horas_sin_respuesta(monkeypatch: Any) -> None:
     cw = _cw(
         [{"id": 94, "status": "snoozed", "created_at": VIEJA, "labels": []}],
@@ -45,7 +45,7 @@ async def test_marca_la_que_lleva_horas_sin_respuesta(monkeypatch: Any) -> None:
     cw.snooze.assert_awaited_once_with(94)
 
 
-@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+@pytest.mark.asyncio
 async def test_no_marca_la_recien_creada(monkeypatch: Any) -> None:
     """El bug original: marcaba y escondía el hilo al instante de crearlo."""
     cw = _cw([{"id": 95, "status": "open", "created_at": RECIENTE, "labels": []}])
@@ -54,7 +54,7 @@ async def test_no_marca_la_recien_creada(monkeypatch: Any) -> None:
     cw.snooze.assert_not_awaited()
 
 
-@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+@pytest.mark.asyncio
 async def test_no_marca_si_el_cliente_respondio(monkeypatch: Any) -> None:
     cw = _cw(
         [{"id": 96, "status": "open", "created_at": VIEJA, "labels": []}],
@@ -64,7 +64,7 @@ async def test_no_marca_si_el_cliente_respondio(monkeypatch: Any) -> None:
     cw.add_labels.assert_not_awaited()
 
 
-@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+@pytest.mark.asyncio
 async def test_idempotente_y_salta_resueltas(monkeypatch: Any) -> None:
     cw = _cw(
         [
@@ -76,7 +76,7 @@ async def test_idempotente_y_salta_resueltas(monkeypatch: Any) -> None:
     cw.add_labels.assert_not_awaited()
 
 
-@pytest.mark.asyncio  # type: ignore[untyped-decorator]
+@pytest.mark.asyncio
 async def test_un_fallo_no_aborta_el_barrido(monkeypatch: Any) -> None:
     """Si una conversación falla, las demás se siguen procesando."""
     cw = _cw(
