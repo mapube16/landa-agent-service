@@ -1,8 +1,42 @@
 # CLAUDE.md — landa-agent-service
 
-Microservicio de LANDA Tech: agente de WhatsApp para DPG Seguros. Q&A inbound de pólizas (saldo, estado, coberturas) + flujo de validación de pago con escalación humana vía Chatwoot. Repo aparte de `lambda-proyect` (que tiene el agente de voz).
+Microservicio de LANDA Tech: agente de WhatsApp (**Aria**) para DPG Seguros. Q&A inbound de pólizas (saldo, estado, coberturas) + flujo de validación de pago con escalación humana vía Chatwoot.
 
-Para contexto profundo lee `.planning/PROJECT.md` y `.planning/ROADMAP.md`. Este archivo es la briefing rápida.
+---
+
+## ⚠️ El sistema está partido en DOS repos
+
+| Repo | Ruta local | Qué hace | Canal |
+|---|---|---|---|
+| **landa-agent-service** (este) | `C:\Users\maxim\landa-agent-service` | Agente de **WHATSAPP** | **Meta Cloud API** |
+| **lambda-proyect** | `C:\Users\maxim\Desktop\hive-pixel-office` | Agente de **VOZ**, cobranza, prospección, sync Softseguros | Twilio (llamadas) |
+
+**Aria usa el MISMO número para voz y WhatsApp**, pero cada canal vive en un repo
+distinto. Si buscas la lógica de llamadas, el motor de voz o la sincronización de
+cartera con Softseguros, **no está aquí** — está en `lambda-proyect/backend/cobranza/`.
+
+### Cómo hablan entre sí
+
+```
+lambda-proyect  --POST /case/handoff-->  landa-agent-service
+   (voz)         LAMBDA_PROYECT_*            (este repo)
+
+landa-agent-service  --POST /cobranza/case/{id}/escalate-->  lambda-proyect
+   (este repo)             WA_TO_VOICE_TOKEN                     (voz)
+```
+
+- Este lado: [app/webhooks/handoff.py](app/webhooks/handoff.py)
+- El otro lado: `lambda-proyect/backend/cobranza/wa_bridge.py` y `wa_bridge_router.py`
+- Contrato: `.planning/contracts/lambda-handoff-contract.md`
+
+**Ojo:** `lambda-proyect` tiene un `TWILIO_WHATSAPP_FROM` en su `.env` que apunta
+al sandbox de Twilio, y un `routers/whatsapp.py` con webhooks de Twilio. **Nada de
+eso es Aria.** Es otro producto. El WhatsApp real es este repo, vía Meta.
+
+---
+
+Para contexto profundo de ESTE repo lee `.planning/PROJECT.md` y `.planning/ROADMAP.md`.
+Este archivo es la briefing rápida.
 
 ---
 

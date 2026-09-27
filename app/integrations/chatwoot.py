@@ -334,12 +334,16 @@ class ChatwootClient:
         )
         return int(reusables[0]["id"])
 
-    async def _create_or_get_contact(self, phone: str) -> int:
+    async def _create_or_get_contact(self, phone: str, name: str | None = None) -> int:
         """POST /contacts; on 422 duplicate, recover via GET /contacts/search.
 
         Chatwoot expects E.164 phone numbers WITH the ``+`` prefix; Meta
         webhook payloads strip it. Normalize here so we don't double-create
         the same contact under two spellings.
+
+        ``name`` es opcional pero vale la pena mandarlo: sin el, cartera ve un
+        numero pelado en el inbox. Asi se creo el backlog que
+        scripts/sync_contact_names.py tuvo que rellenar a mano.
         """
         normalized = phone if phone.startswith("+") else f"+{phone}"
         path = f"/api/v1/accounts/{self._account_id}/contacts"
@@ -348,6 +352,8 @@ class ChatwootClient:
             "phone_number": normalized,
             "identifier": normalized,
         }
+        if name:
+            payload["name"] = name
         try:
             r = await self._http.post(path, json=payload)
             r.raise_for_status()
@@ -458,6 +464,34 @@ class ChatwootClient:
             payload = [c for c in payload if (c.get("last_activity_at") or 0) >= since_epoch]
         return payload
 
+    async def list_conversations_by_label(
+        self, label: str, *, max_pages: int = 20
+    ) -> list[dict[str, Any]]:
+        """Conversaciones con ``label``, paginando hasta agotarlas.
+
+        ``list_conversations`` devuelve solo la primera pagina (25) y lo usa la
+        auditoria diaria, que solo mira lo reciente. El barrido de siniestros
+        necesita las 145, y filtrar por etiqueta del lado del servidor evita
+        traer todo el inbox para descartarlo aca.
+        """
+        path = f"/api/v1/accounts/{self._account_id}/conversations"
+        out: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for page in range(1, max_pages + 1):
+            r = await self._http.get(
+                path,
+                params={"status": "all", "labels[]": label, "page": page},
+            )
+            r.raise_for_status()
+            payload: list[dict[str, Any]] = r.json().get("data", {}).get("payload", [])
+            fresh = [c for c in payload if c.get("id") not in seen]
+            if not fresh:
+                break
+            seen.update(int(c["id"]) for c in fresh if c.get("id"))
+            out.extend(fresh)
+        log.info("chatwoot.list_by_label", label=label, n=len(out))
+        return out
+
     async def list_messages(self, conversation_id: int) -> list[dict[str, Any]]:
         """Return the messages of a conversation (oldest first), for auditing."""
         path = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/messages"
@@ -485,6 +519,53 @@ class ChatwootClient:
         r = await self._http.post(base, json={"labels": merged})
         r.raise_for_status()
         log.info("chatwoot.labels.set", conv_id=conversation_id, n=len(merged))
+
+    async def get_labels(self, conversation_id: int) -> list[str]:
+        """Etiquetas actuales de una conversacion ([] si falla la lectura)."""
+        base = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/labels"
+        try:
+            r = await self._http.get(base)
+            r.raise_for_status()
+            labels: list[str] = r.json().get("payload", [])
+            return labels
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chatwoot.labels.get_failed", error_type=type(exc).__name__)
+            return []
+
+    async def replace_labels(self, conversation_id: int, labels: list[str]) -> None:
+        """Deja EXACTAMENTE ``labels`` en la conversacion.
+
+        A diferencia de ``add_labels`` (que une), aca el llamador ya decidio el
+        conjunto final — lo usa el enrutador de siniestros, que debe QUITAR el
+        estado anterior al poner el nuevo.
+        """
+        base = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/labels"
+        r = await self._http.post(base, json={"labels": list(dict.fromkeys(labels))})
+        r.raise_for_status()
+        log.info("chatwoot.labels.replaced", conv_id=conversation_id, n=len(labels))
+
+    async def set_stage_label(self, conversation_id: int, label: str, prefix: str) -> None:
+        """Apply ``label`` replacing any other label under ``prefix``.
+
+        Las etapas de un siniestro son excluyentes: una conversación está en
+        perito O en ofrecimiento, nunca en ambas. ``add_labels`` solo suma, así
+        que aquí se quitan las del mismo prefijo antes de poner la nueva. Las
+        etiquetas ajenas al prefijo (escalado-humano, siniestro-sismo) se
+        conservan.
+        """
+        base = f"/api/v1/accounts/{self._account_id}/conversations/{conversation_id}/labels"
+        current: list[str] = []
+        try:
+            g = await self._http.get(base)
+            g.raise_for_status()
+            current = g.json().get("payload", [])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chatwoot.labels.get_failed", error_type=type(exc).__name__)
+        kept = [x for x in current if not x.startswith(prefix) or x == label]
+        merged = list(dict.fromkeys([*kept, label]))
+        r = await self._http.post(base, json={"labels": merged})
+        r.raise_for_status()
+        log.info("chatwoot.labels.stage", conv_id=conversation_id, label=label)
 
 
 @lru_cache(maxsize=1)

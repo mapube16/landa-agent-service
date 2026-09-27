@@ -324,8 +324,12 @@ class MetaCloudClient:
         body_params: list[str],
         quick_reply_payloads: list[str] | None = None,
         header_params: list[str] | None = None,
+        header_image_id: str | None = None,
     ) -> str:
         """Send a template message with header/body params + quick replies.
+
+        ``header_image_id``: media_id for an IMAGE-header template (mutually
+        exclusive with ``header_params``).
 
         Payload shape per RESEARCH "Template message shape": one indexed
         ``quick_reply`` button component per payload string, plus optional
@@ -337,7 +341,14 @@ class MetaCloudClient:
         taps come back as ``interactive.button_reply.id`` carrying the payload.
         """
         components: list[dict[str, Any]] = []
-        if header_params:
+        if header_image_id:
+            components.append(
+                {
+                    "type": "header",
+                    "parameters": [{"type": "image", "image": {"id": header_image_id}}],
+                }
+            )
+        elif header_params:
             components.append(
                 {
                     "type": "header",
