@@ -765,3 +765,104 @@ async def test_f3_webhook_normal_text_dispatches_graph_and_enqueues_mirror(
     assert call_args.args[0] == "mirror_inbound"
     assert call_args.kwargs.get("phone") == "15555550100"
     assert call_args.kwargs.get("wamid") == "wamid.normal1"
+
+
+# ---------------------------------------------------------------------------
+# Ventana de 24 h: boton "Ver respuesta" de la plantilla de aviso
+# ---------------------------------------------------------------------------
+
+
+async def test_ver_respuesta_entrega_lo_guardado_sin_pasar_por_el_bot(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """El cliente toca "Ver respuesta": se le entrega la respuesta guardada del
+    agente y el bot no interviene (contestaria pidiendo la cedula)."""
+    import json as _json
+
+    from app.main import app as fastapi_app
+
+    meta_mock, redis_mock, qa_graph_mock, _ = stub_app_state_f3
+    guardado = {"content": "Hola, su reclamación avanza", "attachments": [], "conv_id": 7}
+    redis_mock.lrange = AsyncMock(return_value=[_json.dumps(guardado).encode()])
+    redis_mock.delete = AsyncMock(return_value=1)
+    chatwoot_mock = MagicMock()
+    chatwoot_mock.post_private_note = AsyncMock()
+    monkeypatch.setattr(fastapi_app.state, "chatwoot", chatwoot_mock, raising=False)
+
+    body = _inbound_template_button_payload(payload="ver_respuesta", text="Ver respuesta")
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": _sign(body), "Content-Type": "application/json"},
+    )
+
+    assert r.status_code == 200
+    await asyncio.sleep(0.05)
+    qa_graph_mock.ainvoke.assert_not_called()
+    meta_mock.send_text.assert_awaited_once()
+    assert meta_mock.send_text.await_args.args[1] == "Hola, su reclamación avanza"
+    chatwoot_mock.post_private_note.assert_awaited_once()
+
+
+async def test_ver_respuesta_sin_nada_guardado_avisa_que_escribira_un_asesor(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+) -> None:
+    meta_mock, redis_mock, qa_graph_mock, _ = stub_app_state_f3
+    redis_mock.lrange = AsyncMock(return_value=[])
+
+    body = _inbound_template_button_payload(payload="ver_respuesta", text="Ver respuesta")
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": _sign(body), "Content-Type": "application/json"},
+    )
+
+    assert r.status_code == 200
+    await asyncio.sleep(0.05)
+    qa_graph_mock.ainvoke.assert_not_called()
+    assert "Un asesor de DPG" in meta_mock.send_text.await_args.kwargs["body"]
+
+
+async def test_cliente_rate_limited_igual_recibe_sus_pendientes(
+    client: AsyncClient,
+    stub_app_state_f3: tuple[MagicMock, MagicMock, MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entregar lo que el agente ya escribio no es procesar al cliente: el
+    limite de velocidad no debe frenar la entrega de pendientes."""
+    import json as _json
+
+    import app.webhooks.meta as meta_mod
+    from app.main import app as fastapi_app
+
+    meta_mock, redis_mock, qa_graph_mock, _ = stub_app_state_f3
+    guardado = {"content": "Respuesta del asesor", "attachments": [], "conv_id": 7}
+    redis_mock.lrange = AsyncMock(return_value=[_json.dumps(guardado).encode()])
+    redis_mock.delete = AsyncMock(return_value=1)
+    chatwoot_mock = MagicMock()
+    chatwoot_mock.post_private_note = AsyncMock()
+    monkeypatch.setattr(fastapi_app.state, "chatwoot", chatwoot_mock, raising=False)
+
+    async def _blocked(redis: Any, *, phone: str, poliza_id: Any = None) -> Any:
+        return type("_RL", (), {"allowed": False, "scope": "phone"})()
+
+    monkeypatch.setattr(meta_mod, "check_rate_limit", _blocked)
+
+    body = _inbound_text_payload(from_="15555550100")
+    r = await client.post(
+        "/webhooks/meta",
+        content=body,
+        headers={"X-Hub-Signature-256": _sign(body), "Content-Type": "application/json"},
+    )
+
+    assert r.status_code == 200
+    await asyncio.sleep(0.05)
+    qa_graph_mock.ainvoke.assert_not_called()  # el bot NO procesa
+    textos = [
+        c.args[1] if c.args and len(c.args) > 1 else c.kwargs.get("body", "")
+        for c in meta_mock.send_text.await_args_list
+    ]
+    assert any("Respuesta del asesor" in t for t in textos)  # pero SI entrega

@@ -15,6 +15,7 @@ Tests use @pytest.mark.integration so they can be filtered with -m integration.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -400,6 +401,8 @@ async def test_chatwoot_agent_reply_relays_to_client(
     """
     # Seed inverse index — get_phone_by_conv(42) resolves to CLIENT_PHONE.
     chatwoot_mock.get_phone_by_conv = AsyncMock(return_value=CLIENT_PHONE)
+    # El cliente escribio hace un momento: ventana de 24 h abierta (window.py).
+    redis_mock.get = AsyncMock(return_value=str(time.time()).encode())
 
     app = _build_chatwoot_app(meta_mock, chatwoot_mock, redis_mock)
 

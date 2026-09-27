@@ -171,6 +171,9 @@ class WhatsAppSettings(BaseSettings):
     # CSV env var ``WA_ECHO_ALLOWLIST=+1...,+2...`` parsed by ``_split_csv``
     # below (same trick as ``LLMSettings.fallbacks_conversation``).
     echo_allowlist: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Plantilla aprobada que avisa al cliente cuando el agente le escribe pasadas
+    # 24 h (features/escalation/window.py). Debe tener un boton quick reply.
+    reengage_template: str = "respuesta_pendiente_asesor"
 
     @field_validator("echo_allowlist", mode="before")
     @classmethod

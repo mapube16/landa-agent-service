@@ -56,9 +56,16 @@ from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
 from app.config.settings import settings
+from app.features.escalation.window import (
+    REENGAGE_PAYLOAD,
+    flush_pending,
+    on_failed_status,
+    record_inbound,
+)
 from app.features.payment.attachment import has_blocked_extension
 from app.features.payment.cartera import handle_cartera_message
 from app.features.qa.messages import ESCAPE_REGEX, T_06
+from app.features.siniestros.routing import apply_status
 from app.integrations.meta_cloud import _hash_phone
 from app.models.meta import InboundEnvelope, InboundMessage, MessageText
 from app.security import audit_log
@@ -441,10 +448,22 @@ async def receive(request: Request) -> Response:
                         result="status_received",
                         error_code=errs[0].get("code") if errs else None,
                         error_title=errs[0].get("title") if errs else None,
-                        error_details=(errs[0].get("error_data") or {}).get("details")
-                        if errs
-                        else None,
+                        error_details=(
+                            (errs[0].get("error_data") or {}).get("details") if errs else None
+                        ),
                     )
+                    # Si el mensaje rechazado era de un agente, avisarle en Chatwoot y,
+                    # si fue por la ventana de 24 h, guardarlo y mandar la plantilla.
+                    if status.get("status") == "failed" and status.get("id"):
+                        await on_failed_status(
+                            redis=redis,
+                            chatwoot=getattr(request.app.state, "chatwoot", None),
+                            meta=meta,
+                            wamid=str(status["id"]),
+                            phone=str(status.get("recipient_id", "")),
+                            error_code=errs[0].get("code") if errs else None,
+                            error_title=errs[0].get("title") if errs else None,
+                        )
                 continue
 
             for msg in value.messages or []:
@@ -604,6 +623,12 @@ async def _handle_text_message(
         )
         task.add_done_callback(_log_task_error)
 
+    # Step 4b: Si el hilo es de siniestros del sismo, la respuesta ("4", "ya me
+    # pagaron") mueve la etiqueta de estado. En background: etiquetar no puede
+    # retrasar ni tumbar la respuesta al cliente.
+    _label_task = asyncio.create_task(apply_status(msg.from_, raw_text))
+    _label_task.add_done_callback(_log_task_error)
+
     # Step 5: Mirror inbound via ARQ (async, non-blocking).
     if hasattr(app_state, "arq") and app_state.arq is not None:
         try:
@@ -699,6 +724,27 @@ async def _handle_comprobante(*, msg: InboundMessage, request: Request, phone_ha
         )
 
 
+def _pending_sender(app_state: Any, phone: str) -> Any:
+    """Envia un mensaje guardado del agente: texto normal o adjuntos de Chatwoot."""
+
+    async def _send(item: dict[str, Any]) -> None:
+        attachments = item.get("attachments") or []
+        if attachments:
+            from app.webhooks.chatwoot import _relay_attachments
+
+            await _relay_attachments(
+                attachments,
+                phone=phone,
+                content=str(item.get("content") or ""),
+                chatwoot=app_state.chatwoot,
+                meta=app_state.meta,
+            )
+        elif item.get("content"):
+            await app_state.meta.send_text(phone, str(item["content"]))
+
+    return _send
+
+
 async def _dispatch_message(  # noqa: C901
     *, msg: InboundMessage, meta: Any, redis: Any, request: Request
 ) -> None:
@@ -750,6 +796,22 @@ async def _dispatch_message(  # noqa: C901
             db_session_factory=getattr(app_state, "session_factory", None),
         )
         return
+
+    # 4c-bis. Ventana de 24 h: registrar cuando escribio el cliente, antes del
+    #         limite de velocidad porque para WhatsApp todo mensaje abre la ventana.
+    await record_inbound(redis, normalized_from)
+
+    # 4c-ter. El cliente acaba de escribir: la ventana esta abierta, asi que las
+    #         respuestas del equipo que quedaron guardadas se entregan ya. Va
+    #         ANTES del limite de velocidad: entregar lo que el agente ya
+    #         escribio no es procesar al cliente, y un cliente frenado por el
+    #         limite igual tiene derecho a recibir su respuesta.
+    delivered = await flush_pending(
+        redis,
+        getattr(request.app.state, "chatwoot", None),
+        normalized_from,
+        _pending_sender(request.app.state, normalized_from),
+    )
 
     # 4c'. Rate limit (05-06, SEC-06) — AFTER cartera branch so cartera numbers
     #      are structurally exempt (T-05-06-02). BEFORE client allowlist so
@@ -849,6 +911,26 @@ async def _dispatch_message(  # noqa: C901
     # con voice_no_answer_followup: el cliente tocaba el botón y no pasaba nada).
     if msg.type == "button" and msg.button is not None:
         selected = msg.button.payload or msg.button.text
+        # "Ver respuesta" de la plantilla de 24 h: lo pendiente ya se entrego
+        # arriba. No pasa por el bot, que contestaria pidiendo la cedula.
+        if selected == REENGAGE_PAYLOAD:
+            if not delivered:
+                reply = "Gracias por responder. Un asesor de DPG te escribirá por este chat."
+                try:
+                    await meta.send_text(to=msg.from_, body=reply)
+                    await _enqueue_mirror_outbound(
+                        request.app.state, msg.from_, reply, f"{msg.id}:out"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.error("webhook.reengage_ack.send_failed", error_type=type(exc).__name__)
+            log.info(
+                "webhook.template_button.tap",
+                message_id=msg.id,
+                phone_hash=phone_hash,
+                payload=selected,
+                result="reengage_delivered" if delivered else "reengage_ack",
+            )
+            return
         # D-21: "Más tarde" gets a fixed courteous close — no LLM, no graph.
         if selected == "mas_tarde":
             reply = "¡Listo! Escríbenos cuando puedas. Que tengas un buen día. 😊"

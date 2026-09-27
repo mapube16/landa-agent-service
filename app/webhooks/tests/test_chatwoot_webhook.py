@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -56,6 +57,8 @@ def mocks() -> tuple[MagicMock, MagicMock, MagicMock]:
     redis = MagicMock()
     redis.set = AsyncMock(return_value=True)  # default: first-see
     redis.delete = AsyncMock(return_value=1)
+    # Por defecto el cliente escribio hace un momento: ventana de 24 h abierta.
+    redis.get = AsyncMock(return_value=str(time.time()).encode())
     return meta, chatwoot, redis
 
 
@@ -301,3 +304,51 @@ async def test_relays_image_attachment(
     assert args[2] == "image"
     assert kwargs.get("caption") is None
     meta.send_text.assert_not_called()
+
+
+async def test_ventana_cerrada_no_envia_texto_y_avisa_con_plantilla(
+    client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
+) -> None:
+    """Cliente sin escribir hace mas de 24 h: WhatsApp rechazaria el texto y en
+    Chatwoot se veria enviado. Se guarda, sale la plantilla y se avisa al agente."""
+    meta, chatwoot, redis = mocks
+    redis.get = AsyncMock(return_value=None)
+    redis.rpush = AsyncMock(return_value=1)
+    redis.expire = AsyncMock()
+    redis.llen = AsyncMock(return_value=1)
+    chatwoot.list_messages = AsyncMock(
+        return_value=[{"message_type": 0, "created_at": time.time() - 3 * 86400}]
+    )
+    chatwoot.post_private_note = AsyncMock()
+    meta.send_template = AsyncMock(return_value="wamid.tpl")
+
+    body = _payload()
+    r = await client.post(
+        "/webhooks/chatwoot", content=body, headers={"X-Chatwoot-Signature": _sign(body)}
+    )
+
+    assert r.status_code == 200
+    meta.send_text.assert_not_called()
+    meta.send_template.assert_awaited_once()
+    redis.rpush.assert_awaited_once()
+    note = chatwoot.post_private_note.await_args.args[1]
+    assert "más de 24 horas" in note
+
+
+async def test_error_de_meta_deja_nota_privada_al_agente(
+    client: AsyncClient, mocks: tuple[MagicMock, MagicMock, MagicMock]
+) -> None:
+    """Si Meta devuelve error con ventana abierta, el mensaje se ve enviado en
+    Chatwoot pero no salio: el agente debe recibir una nota privada."""
+    meta, chatwoot, redis = mocks
+    meta.send_text = AsyncMock(side_effect=RuntimeError("meta 500"))
+    chatwoot.post_private_note = AsyncMock()
+
+    body = _payload()
+    r = await client.post(
+        "/webhooks/chatwoot", content=body, headers={"X-Chatwoot-Signature": _sign(body)}
+    )
+
+    assert r.status_code == 200
+    note = chatwoot.post_private_note.await_args.args[1]
+    assert "error al enviar tu mensaje" in note

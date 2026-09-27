@@ -315,6 +315,84 @@ async def sink_audit_log(ctx: dict[str, Any]) -> None:
         )
 
 
+async def watch_pending_queues(ctx: dict[str, Any]) -> None:
+    """Diario (07:00 UTC): vigila las colas de mensajes del equipo guardados por
+    la ventana de 24 h (``wa:pending:*``, features/escalation/window.py).
+
+    Los pendientes expiran a los 7 dias en silencio; sin este barrido nadie se
+    entera de que un cliente nunca respondio. Para cada cola con items de 3+
+    dias deja una nota privada en la conversacion pidiendo llamar al cliente.
+    """
+    import json as _json
+    import time as _time
+
+    import structlog as _structlog
+
+    from app.integrations.chatwoot import get_chatwoot_client
+
+    _log = _structlog.get_logger("worker.watch_pending_queues")
+    redis = ctx.get("redis")
+    if redis is None:
+        _log.warning("worker.watch_pending.no_redis")
+        return
+    total = stale = 0
+    try:
+        async for key in redis.scan_iter(match=b"wa:pending:*"):
+            raw_items = await redis.lrange(key, 0, -1)
+            if not raw_items:
+                continue
+            total += 1
+            items = [_json.loads(x) for x in raw_items]
+            oldest = min(float(it.get("t") or _time.time()) for it in items)
+            age_days = (_time.time() - oldest) / 86400
+            if age_days < 3:
+                continue
+            stale += 1
+            conv_id = next((it.get("conv_id") for it in items if it.get("conv_id")), None)
+            if conv_id is None:
+                continue
+            n = len(items)
+            plural = "mensaje del equipo espera" if n == 1 else "mensajes del equipo esperan"
+            try:
+                await get_chatwoot_client().post_private_note(
+                    int(conv_id),
+                    f"{n} {plural} hace {int(age_days)} días a que el cliente responda. "
+                    "A los 7 días se descartan: si sigue sin responder, llámalo.",
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("worker.watch_pending.note_failed", error_type=type(exc).__name__)
+        _log.info("worker.watch_pending.done", queues=total, stale=stale)
+    except Exception as exc:  # noqa: BLE001 — un cron nunca tumba el worker
+        _log.error("worker.watch_pending.error", error_type=type(exc).__name__)
+
+
+async def sync_siniestro_stages(ctx: dict[str, Any]) -> None:
+    """Cada 2 dias (06:00 UTC = 01:00 Bogota): lee las conversaciones del sismo
+    y mueve la etiqueta de etapa segun lo que cuenta el cliente.
+
+    Arranca en modo SILENCIOSO (``SINIESTROS_SYNC_APPLY=false``, el default):
+    registra lo que haria sin tocar Chatwoot. El operador contrasta la lectura
+    del modelo contra la realidad y recien ahi pone la env var en ``true``.
+
+    El agente nunca retrocede una etapa ni toca ``siniestro-sismo`` — ver
+    ``app/features/siniestros/stages.py``.
+    """
+    import os
+
+    import structlog as _structlog
+
+    _log = _structlog.get_logger("worker.sync_siniestro_stages")
+    apply = os.getenv("SINIESTROS_SYNC_APPLY", "").strip().lower() in {"1", "true", "yes"}
+
+    try:
+        from app.features.siniestros.sync import sync_stages
+
+        rep = await sync_stages(apply=apply)
+        _log.info("worker.sync_siniestro_stages.done", apply=apply, **rep.as_dict())
+    except Exception as exc:  # noqa: BLE001 — un cron nunca tumba el worker
+        _log.error("worker.sync_siniestro_stages.error", error_type=type(exc).__name__)
+
+
 class WorkerSettings:
     """ARQ worker configuration.
 
@@ -333,6 +411,8 @@ class WorkerSettings:
         mark_unanswered_conversations,
         verify_audit_chain,
         sink_audit_log,
+        sync_siniestro_stages,
+        watch_pending_queues,
     ]
 
     # cron_jobs -- four scheduled jobs:
@@ -350,6 +430,18 @@ class WorkerSettings:
         cron(mark_unanswered_conversations, minute={0, 15, 30, 45}),
         cron(verify_audit_chain, hour={3}, minute={0}),
         cron(sink_audit_log, hour={3}, minute={30}),
+        # Colas de la ventana de 24 h: pendientes viejos -> nota privada al agente.
+        cron(watch_pending_queues, hour={7}, minute={0}),
+        # Siniestros del sismo: dias impares a las 06:00 UTC (01:00 Bogota).
+        # ARQ no tiene "cada N dias"; los impares dan el ritmo de ~2 dias que
+        # pidio el operador. El salto 31->1 (dos dias seguidos) es inofensivo:
+        # el barrido es idempotente y solo avanza etapas.
+        cron(
+            sync_siniestro_stages,
+            day=set(range(1, 32, 2)),
+            hour={6},
+            minute={0},
+        ),
     ]
 
     redis_settings: RedisSettings = RedisSettings.from_dsn(settings.redis.url.get_secret_value())

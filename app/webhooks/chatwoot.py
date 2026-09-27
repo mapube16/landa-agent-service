@@ -88,13 +88,15 @@ async def _relay_attachments(
     content: str,
     chatwoot: Any,
     meta: Any,
-) -> None:
+) -> list[str]:
     """Re-upload Chatwoot attachments to Meta and send them (D-18).
 
     Only ``file_type`` image/file with an allowlisted mime relays; everything
     else is skipped with a log. The agent's text rides as caption on the
-    first attachment only, so it is never duplicated.
+    first attachment only, so it is never duplicated. Devuelve los ``wamid``
+    enviados, para la red de seguridad de la ventana de 24 h.
     """
+    wamids: list[str] = []
     chatwoot_host = urlparse(settings.chatwoot.url).netloc
     for i, att in enumerate(attachments):
         file_type = att.get("file_type")
@@ -124,9 +126,10 @@ async def _relay_attachments(
             media_id = await meta.upload_media(Path(tmp.name), mime)
             media_type = "image" if mime.startswith("image/") else "document"
             caption = content if (i == 0 and content) else None
-            await meta.send_media(phone, media_id, media_type, caption=caption)
+            wamids.append(await meta.send_media(phone, media_id, media_type, caption=caption))
         finally:
             await anyio.Path(tmp.name).unlink(missing_ok=True)
+    return wamids
 
 
 def _status_from_changed_attributes(payload: dict[str, Any]) -> str | None:
@@ -192,13 +195,33 @@ async def _resolve_and_relay(
     meta = request.app.state.meta
     content = str(payload.get("content") or "")
     attachments: list[dict[str, Any]] = payload.get("attachments") or []
-    try:
+
+    async def _send_now() -> list[str]:
+        wamids: list[str] = []
         if content and not attachments:
-            await meta.send_text(phone, content)
+            wamids.append(await meta.send_text(phone, content))
         if attachments:
-            await _relay_attachments(
+            wamids += await _relay_attachments(
                 attachments, phone=phone, content=content, chatwoot=chatwoot, meta=meta
             )
+        return wamids
+
+    # Pasadas 24 h sin mensaje del cliente, WhatsApp rechaza el texto libre y en
+    # Chatwoot se veria enviado: relay_or_queue lo guarda y avisa con plantilla.
+    from app.features.escalation.window import relay_or_queue
+
+    try:
+        outcome = await relay_or_queue(
+            redis=request.app.state.redis,
+            chatwoot=chatwoot,
+            meta=meta,
+            phone=phone,
+            conv_id=int(conv_id),
+            content=content,
+            attachments=attachments,
+            msg_id=msg_id,
+            send=_send_now,
+        )
     except Exception as exc:  # noqa: BLE001
         # ponytail: ack 200 + log on relay failure; add ARQ retry if losses appear.
         log.error(
@@ -208,6 +231,20 @@ async def _resolve_and_relay(
             to_hash=_hash_phone(phone),
             error_type=type(exc).__name__,
         )
+        # Sin esta nota el agente cree que su mensaje salio: en Chatwoot se ve
+        # enviado aunque Meta haya devuelto error. No se reencola a ciegas (un
+        # timeout despues de que Meta acepto duplicaria el mensaje).
+        try:
+            await chatwoot.post_private_note(
+                int(conv_id),
+                "WhatsApp devolvió un error al enviar tu mensaje. Puede no haber "
+                "llegado: reintenta o llama al cliente.",
+            )
+        except Exception as note_exc:  # noqa: BLE001
+            log.warning(
+                "chatwoot.webhook.relay_failed_note_failed",
+                error_type=type(note_exc).__name__,
+            )
         return {"error": "relay_failed"}
 
     log.info(
@@ -217,6 +254,7 @@ async def _resolve_and_relay(
         to_hash=_hash_phone(phone),
         n_attachments=len(attachments),
         content_len=len(content),
+        outcome=outcome,
     )
 
     # A human replied → real takeover: hard mute (no grace auto-recovery)
