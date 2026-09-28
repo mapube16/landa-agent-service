@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import date
 from typing import Any
 
 import pybreaker
@@ -55,6 +56,11 @@ _EMOJI_NUMS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣",
 # WhatsApp interactive list cap per Meta docs.
 _LIST_PAGE_SIZE = 9  # 9 polizas + 1 "Ver más" row = 10 total (Meta limit)
 _MORE_BUTTON_ID = "__more"
+_ESTADOS_INACTIVOS = {"CANCELADA", "NO RENOVADA", "VENCIDA", "COTIZACION", "EXPEDICION"}
+_SIN_VIGENTES = (
+    "No encontré pólizas vigentes a tu nombre. Te conecto con un agente de DPG "
+    "para que revise tu caso; te va a contestar pronto acá mismo."
+)
 _QA_BUTTON_IDS = {"saldo", "estado", "coberturas", "info_general", "agente"}
 
 # Client can't find / doesn't recognize their policy in the list → escalate
@@ -177,16 +183,23 @@ def _vigentes_unicas(polizas: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     SoftSeguros devuelve cada renovación/versión como registro aparte (la
     misma POL-6108 salía dos veces, conv #1001). Acordado con DPG: al cliente
-    solo se le listan las vigentes, cada una una vez. Sin ninguna vigente se
-    cae a la lista deduplicada completa para no dejar al cliente sin salida.
+    solo se le listan las vigentes, cada una una vez.
+
+    Vigente = ``fecha_fin`` hoy o después. El nombre del estado no sirve: las
+    pólizas vencidas quedan como "Devengada" (un cliente real tenía 10+
+    "Devengada" y ninguna "Vigente"). Sin ``fecha_fin`` se usa el estado.
     """
-    vigentes = [
-        p
-        for p in polizas
-        if str(p.get("estado_poliza_nombre", p.get("estado", ""))).strip().upper() == "VIGENTE"
-    ]
+    hoy = date.today().isoformat()
+    vigentes = []
+    for p in polizas:
+        estado = str(p.get("estado_poliza_nombre", p.get("estado", ""))).strip().upper()
+        if estado in _ESTADOS_INACTIVOS:
+            continue
+        fin = str(p.get("fecha_fin") or "")[:10]
+        if (fin >= hoy) if fin else estado == "VIGENTE":
+            vigentes.append(p)
     unicas: dict[str, dict[str, Any]] = {}
-    for p in vigentes or polizas:
+    for p in vigentes:
         key = str(p.get("numero_poliza") or p.get("id", "")).lstrip("0")
         unicas.setdefault(key, p)
     return list(unicas.values())
@@ -460,6 +473,14 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
             }
 
     polizas = _vigentes_unicas(polizas)
+
+    if not polizas:
+        return {
+            "node": "escalating",
+            "escalation_reason": "sin_polizas_vigentes",
+            "cliente_doc": doc_input,
+            "messages": [AIMessage(content=_SIN_VIGENTES)],
+        }
 
     if len(polizas) == 1:
         p = polizas[0]

@@ -326,7 +326,9 @@ class SoftSegurosClient:
             "polizas_by_cliente",
             "/api/poliza/",
             cliente=cliente_id,
-            limit=20,
+            # ponytail: 100 cubre a los clientes de DPG; con 20 las vigentes
+            # quedaban fuera detrás de versiones vencidas. Paginar si alguno pasa.
+            limit=100,
         )
         results: list[PolizaRaw] = raw.get("results", [])
         return results

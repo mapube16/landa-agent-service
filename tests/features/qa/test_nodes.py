@@ -80,8 +80,8 @@ async def test_node_identify_handoff_doc_never_asks_for_document() -> None:
     from app.features.qa.nodes import node_identify
 
     polizas = [
-        {"id": 1, "numero_poliza": "11111", "ramo_nombre": "AUTO"},
-        {"id": 2, "numero_poliza": "22222", "ramo_nombre": "VIDA"},
+        {"id": 1, "numero_poliza": "11111", "ramo_nombre": "AUTO", "fecha_fin": "2999-01-01"},
+        {"id": 2, "numero_poliza": "22222", "ramo_nombre": "VIDA", "fecha_fin": "2999-01-01"},
     ]
     mock_client = MagicMock()
     mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 7})
@@ -168,7 +168,12 @@ async def test_node_identify_zero_polizas_second_attempt_escalates() -> None:
 async def test_node_identify_one_poliza_locks_and_advances() -> None:
     from app.features.qa.nodes import node_identify
 
-    poliza = {"id": 101, "numero_poliza": "67890", "ramo_nombre": "AUTOMOVILES"}
+    poliza = {
+        "id": 101,
+        "numero_poliza": "67890",
+        "ramo_nombre": "AUTOMOVILES",
+        "estado_poliza_nombre": "Vigente",
+    }
     mock_client = MagicMock()
     mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 1})
     mock_client.get_polizas_by_cliente = AsyncMock(return_value=[poliza])
@@ -230,6 +235,63 @@ async def test_node_identify_multiple_polizas_emits_t04() -> None:
     assert interactive["kind"] == "list"
     row_ids = [rid for rid, _, _ in interactive["rows"]]
     assert row_ids == ["1", "2"]
+
+
+def test_vigentes_unicas_usa_fecha_fin_no_el_estado() -> None:
+    from app.features.qa.nodes import _vigentes_unicas
+
+    polizas = [
+        {
+            "id": 1,
+            "numero_poliza": "1",
+            "estado_poliza_nombre": "Devengada",
+            "fecha_fin": "2020-01-01",
+        },
+        {
+            "id": 2,
+            "numero_poliza": "2",
+            "estado_poliza_nombre": "Devengada",
+            "fecha_fin": "2999-01-01",
+        },
+        {
+            "id": 3,
+            "numero_poliza": "3",
+            "estado_poliza_nombre": "No renovada",
+            "fecha_fin": "2999-01-01",
+        },
+        {
+            "id": 4,
+            "numero_poliza": "4",
+            "estado_poliza_nombre": "Vigente",
+            "fecha_fin": "2020-01-01",
+        },
+    ]
+    assert [p["id"] for p in _vigentes_unicas(polizas)] == [2]
+
+
+@pytest.mark.asyncio
+async def test_node_identify_sin_vigentes_escala() -> None:
+    from app.features.qa.nodes import node_identify
+
+    polizas = [
+        {
+            "id": 1,
+            "numero_poliza": "1",
+            "estado_poliza_nombre": "Devengada",
+            "fecha_fin": "2020-01-01",
+        },
+        {"id": 2, "numero_poliza": "2", "estado_poliza_nombre": "No renovada"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 1})
+    mock_client.get_polizas_by_cliente = AsyncMock(return_value=polizas)
+
+    state = _make_state(messages=[HumanMessage(content="12345678")])
+    with patch("app.features.qa.nodes.get_softseguros_client", return_value=mock_client):
+        result = await node_identify(state)  # type: ignore[arg-type]
+
+    assert result["node"] == "escalating"
+    assert result["escalation_reason"] == "sin_polizas_vigentes"
 
 
 @pytest.mark.asyncio

@@ -392,7 +392,7 @@ async def test_get_polizas_by_cliente_returns_results_list(
     assert result == polizas
     call_args = stub_http.get.call_args
     assert call_args.args[0] == "/api/poliza/"
-    assert call_args.kwargs.get("params") == {"cliente": 7, "limit": 20}
+    assert call_args.kwargs.get("params") == {"cliente": 7, "limit": 100}
 
 
 # ---------------------------------------------------------------------------
