@@ -329,27 +329,46 @@ class SoftSegurosClient:
         return result
 
     async def get_polizas_by_cliente(self, cliente_id: int) -> list[PolizaRaw]:
-        """GET ``/api/poliza/?cliente={cliente_id}&limit=20``.
+        """GET ``/api/poliza/?cliente={cliente_id}&page=N`` — todas las paginas.
 
-        Returns the paginated DRF response's ``results`` list — first 20 pólizas
-        owned by the given cliente. Two-call pattern required by 03-00-PROBE.md
-        (single-call fallback via ``cliente_numero_documento`` does NOT filter
-        server-side and returns the full 52 898-poliza universe).
+        Two-call pattern required by 03-00-PROBE.md (single-call fallback via
+        ``cliente_numero_documento`` does NOT filter server-side and returns
+        the full 52 898-poliza universe).
+
+        SoftSeguros pagina de a 10 e ignora ``limit``/``page_size``/``ordering``,
+        y cada renovacion es un registro aparte ordenado de viejo a nuevo: un
+        cliente con 222 registros (CC 41942034) tenia sus 13 vigentes despues
+        de la pagina 1, y Aria le decia que no tenia polizas vigentes. Se
+        piden todas las paginas; si una falla, falla todo (una lista parcial
+        esconderia vigentes).
 
         READ-ONLY INVARIANT: see module docstring.
         CI guard: name added to METHOD_ALLOWLIST in same commit
         (tests/test_softseguros_readonly.py).
         """
-        raw: dict[str, Any] = await self._cached_get(
-            str(cliente_id),
-            "polizas_by_cliente",
-            "/api/poliza/",
-            cliente=cliente_id,
-            # ponytail: 100 cubre a los clientes de DPG; con 20 las vigentes
-            # quedaban fuera detrás de versiones vencidas. Paginar si alguno pasa.
-            limit=100,
+        cid = str(cliente_id)
+        first: dict[str, Any] = await self._cached_get(
+            cid, "polizas_by_cliente:p1", "/api/poliza/", cliente=cliente_id, page=1
         )
-        results: list[PolizaRaw] = raw.get("results", [])
+        results: list[PolizaRaw] = list(first.get("results", []))
+        per_page = len(results)
+        total = int(first.get("count") or 0)
+        if not first.get("next") or not per_page:
+            return results
+        # ponytail: tope de 50 paginas (500 registros); el cliente mas grande
+        # visto tiene 222. Semaforo: el pool httpx es de 20 con 2 s de espera.
+        pages = min(-(-total // per_page), 50)
+        sem = asyncio.Semaphore(8)
+
+        async def _page(n: int) -> list[PolizaRaw]:
+            async with sem:
+                d: dict[str, Any] = await self._cached_get(
+                    cid, f"polizas_by_cliente:p{n}", "/api/poliza/", cliente=cliente_id, page=n
+                )
+            return list(d.get("results", []))
+
+        for rest in await asyncio.gather(*(_page(n) for n in range(2, pages + 1))):
+            results.extend(rest)
         return results
 
 

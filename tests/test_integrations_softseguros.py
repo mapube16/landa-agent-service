@@ -392,7 +392,31 @@ async def test_get_polizas_by_cliente_returns_results_list(
     assert result == polizas
     call_args = stub_http.get.call_args
     assert call_args.args[0] == "/api/poliza/"
-    assert call_args.kwargs.get("params") == {"cliente": 7, "limit": 100}
+    assert call_args.kwargs.get("params") == {"cliente": 7, "page": 1}
+
+
+@pytest.mark.asyncio
+async def test_get_polizas_by_cliente_reads_every_page(
+    mocked_client: Any, stub_http: MagicMock, stub_redis: MagicMock
+) -> None:
+    """SoftSeguros pagina de a 10: las vigentes estan despues de la pagina 1."""
+    stub_redis.get.return_value = None
+    stub_http.post.return_value = _make_response(200, {"token": "tok"})
+
+    def _page(path: str, params: dict[str, Any], **_: Any) -> MagicMock:
+        n = params["page"]
+        rows = [{"numero_poliza": f"{n}-{i}"} for i in range(10 if n < 3 else 3)]
+        return _make_response(
+            200, {"count": 23, "next": None if n == 3 else "x", "results": rows}
+        )
+
+    stub_http.get.side_effect = _page
+
+    result = await mocked_client.get_polizas_by_cliente(7)
+
+    assert len(result) == 23
+    assert result[-1] == {"numero_poliza": "3-2"}
+    assert sorted(c.kwargs["params"]["page"] for c in stub_http.get.call_args_list) == [1, 2, 3]
 
 
 # ---------------------------------------------------------------------------
