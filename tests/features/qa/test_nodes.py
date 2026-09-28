@@ -204,6 +204,12 @@ async def test_node_identify_multiple_polizas_emits_t04() -> None:
             "ramo_nombre": "HOGAR",
             "estado_poliza_nombre": "Vencida",
         },
+        {
+            "id": 4,
+            "numero_poliza": "022222",
+            "ramo_nombre": "VIDA",
+            "estado_poliza_nombre": "Vigente",
+        },
     ]
     mock_client = MagicMock()
     mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 1})
@@ -213,8 +219,9 @@ async def test_node_identify_multiple_polizas_emits_t04() -> None:
     with patch("app.features.qa.nodes.get_softseguros_client", return_value=mock_client):
         result = await node_identify(state)  # type: ignore[arg-type]
 
+    # Solo vigentes, sin la versión duplicada de 22222.
     assert result["node"] == "awaiting_policy_choice"
-    assert len(result["polizas_list"]) == 3
+    assert len(result["polizas_list"]) == 2
     # Now we emit an interactive list with 3 rows (poliza ids) instead of a
     # numbered emoji string. Verify the interactive payload is attached and
     # the row ids match the poliza ids.
@@ -222,7 +229,7 @@ async def test_node_identify_multiple_polizas_emits_t04() -> None:
     interactive = msg.additional_kwargs["interactive"]
     assert interactive["kind"] == "list"
     row_ids = [rid for rid, _, _ in interactive["rows"]]
-    assert row_ids == ["1", "2", "3"]
+    assert row_ids == ["1", "2"]
 
 
 @pytest.mark.asyncio

@@ -172,6 +172,26 @@ def _build_policy_list(polizas: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _vigentes_unicas(polizas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Solo pólizas vigentes, una fila por ``numero_poliza``.
+
+    SoftSeguros devuelve cada renovación/versión como registro aparte (la
+    misma POL-6108 salía dos veces, conv #1001). Acordado con DPG: al cliente
+    solo se le listan las vigentes, cada una una vez. Sin ninguna vigente se
+    cae a la lista deduplicada completa para no dejar al cliente sin salida.
+    """
+    vigentes = [
+        p
+        for p in polizas
+        if str(p.get("estado_poliza_nombre", p.get("estado", ""))).strip().upper() == "VIGENTE"
+    ]
+    unicas: dict[str, dict[str, Any]] = {}
+    for p in vigentes or polizas:
+        key = str(p.get("numero_poliza") or p.get("id", "")).lstrip("0")
+        unicas.setdefault(key, p)
+    return list(unicas.values())
+
+
 def _polizas_list_message(polizas: list[dict[str, Any]], page: int) -> AIMessage:
     """Build a paged interactive list AIMessage from the polizas list.
 
@@ -415,25 +435,12 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
         # Any other error (5xx, timeout, network) = system issue → escalate after 1 retry
         return _retry_or_escalate(state.get("doc_retries", 0), doc_input)
 
-    n = len(polizas)
-
-    if n == 0:
+    if not polizas:
         return _retry_or_escalate(state.get("doc_retries", 0), doc_input)
-
-    if n == 1:
-        p = polizas[0]
-        poliza_id = str(p.get("id", p.get("numero_poliza", "")))
-        numero = p.get("numero_poliza", poliza_id)
-        return {
-            "node": "answering_qa",
-            "poliza_id": poliza_id,
-            "cliente_doc": doc_input,
-            "polizas_list": polizas,
-            "messages": [_qa_menu_message(numero)],
-        }
 
     # Handoff nombró una póliza específica: si está entre las del cliente,
     # lockeamos directo a ella (la voz llamó por ESA póliza) — sin lista.
+    # Se busca en la lista completa: cobranza puede llamar por una no vigente.
     hint = state.get("handoff_poliza_hint") if handoff_doc else None
     if hint:
         hint_num = re.sub(r"(?i)^POL-", "", str(hint)).strip().lstrip("0")
@@ -451,6 +458,20 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
                 "polizas_list": polizas,
                 "messages": [_qa_menu_message(numero)],
             }
+
+    polizas = _vigentes_unicas(polizas)
+
+    if len(polizas) == 1:
+        p = polizas[0]
+        poliza_id = str(p.get("id", p.get("numero_poliza", "")))
+        numero = p.get("numero_poliza", poliza_id)
+        return {
+            "node": "answering_qa",
+            "poliza_id": poliza_id,
+            "cliente_doc": doc_input,
+            "polizas_list": polizas,
+            "messages": [_qa_menu_message(numero)],
+        }
 
     # N >= 2 — interactive list (Meta limits 10 rows; we page in chunks of 9).
     return {
