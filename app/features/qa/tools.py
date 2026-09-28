@@ -23,13 +23,17 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 import structlog
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from app.features.payment.business_hours import TZ_CO
 from app.integrations.softseguros import get_softseguros_client
+from app.models.softseguros import CarteraStatus
 
 log = structlog.get_logger("features.qa.tools")
 
@@ -45,6 +49,8 @@ _INJECTION_STRIP: re.Pattern[str] = re.compile(r"(?i)(system|instruction|assista
 
 SALDO_ALLOWLIST: list[str] = [
     "saldo_pendiente",
+    "cuotas_pendientes",
+    "pendiente_desde",
     "proximo_pago_monto",
     "proximo_pago_fecha",
     "moneda",
@@ -104,6 +110,40 @@ def sanitize_tool_output(data: dict[str, Any] | None, allowlist: list[str]) -> s
     return json.dumps(filtered, ensure_ascii=False)
 
 
+def hoy_co() -> str:
+    """Fecha de hoy en Colombia (el servidor corre en UTC: de 7 p. m. en
+    adelante ya sería mañana y una cuota "que vence hoy" saldría vencida)."""
+    return datetime.now(TZ_CO).date().isoformat()
+
+
+def _monto(valor: str | None) -> Decimal:
+    try:
+        return Decimal(valor or "0")
+    except InvalidOperation:
+        return Decimal(0)
+
+
+def resumen_saldo(cuotas: list[CarteraStatus], hoy: str | None = None) -> dict[str, Any]:
+    """Saldo real de la póliza a partir de sus cuotas sin pagar.
+
+    Pendiente = cuotas que vencen hoy o ya vencieron (``valor_a_pagar``, porque
+    ``saldo_pendiente`` viene vacío en cuotas sin pagar). La primera cuota
+    futura es el próximo pago. ``saldo_pendiente`` > 0 es lo que decide si se
+    ofrece el botón "Saldo".
+    """
+    hoy = hoy or hoy_co()
+    pendientes = [c for c in cuotas if c.fecha_pago and c.fecha_pago[:10] <= hoy]
+    proxima = next((c for c in cuotas if c.fecha_pago and c.fecha_pago[:10] > hoy), None)
+    return {
+        "saldo_pendiente": int(sum((_monto(c.valor_a_pagar) for c in pendientes), Decimal(0))),
+        "cuotas_pendientes": len(pendientes),
+        "pendiente_desde": (pendientes[0].fecha_pago or "")[:10] if pendientes else None,
+        "proximo_pago_monto": int(_monto(proxima.valor_a_pagar)) if proxima else None,
+        "proximo_pago_fecha": proxima.fecha_pago[:10] if proxima and proxima.fecha_pago else None,
+        "moneda": "COP",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -117,15 +157,8 @@ async def get_saldo(
 
     No requiere argumentos — la póliza viene del estado de la conversación.
     """
-    client = get_softseguros_client()
-    raw = await client.get_poliza(poliza_id)
-    payload = {
-        "saldo_pendiente": raw.get("saldo_pendiente"),
-        "proximo_pago_monto": raw.get("proximo_pago_monto"),
-        "proximo_pago_fecha": raw.get("proximo_pago_fecha"),
-        "moneda": raw.get("moneda", "COP"),
-    }
-    return sanitize_tool_output(payload, SALDO_ALLOWLIST)
+    cuotas = await get_softseguros_client().get_cuotas_pendientes(poliza_id)
+    return sanitize_tool_output(resumen_saldo(cuotas), SALDO_ALLOWLIST)
 
 
 @tool
@@ -186,10 +219,10 @@ async def get_info_general(
     # Cartera enrichment is best-effort — the fast pagos endpoint can be slow
     # or empty for policies without payment rows.
     try:
-        cs = await client.get_cartera_status(poliza_id)
-        if cs is not None:
-            payload["saldo_pendiente"] = cs.saldo_pendiente
-            payload["proximo_compromiso_pago"] = cs.fecha_realizara_pago
+        saldo = resumen_saldo(await client.get_cuotas_pendientes(poliza_id))
+        if saldo["saldo_pendiente"]:
+            payload["saldo_pendiente"] = saldo["saldo_pendiente"]
+        payload["proximo_compromiso_pago"] = saldo["proximo_pago_fecha"]
     except Exception as exc:  # noqa: BLE001
         log.warning("get_info_general.cartera_enrich_failed", error_type=type(exc).__name__)
     return sanitize_tool_output(payload, INFO_GENERAL_ALLOWLIST)

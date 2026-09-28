@@ -168,6 +168,10 @@ class CarteraStatus(BaseModel):
     fecha_realizara_pago: str | None = None
     fecha_realizo_pago: str | None = None
     saldo_pendiente: str | None = None
+    # Monto de la cuota. ``saldo_pendiente`` viene vacío en cuotas sin pagar
+    # (probe 27-sep), así que el saldo real se suma desde aquí.
+    valor_a_pagar: str | None = None
+    numero_pago: str | None = None
     edad_cartera: int | None = None
     ramo_nombre: str | None = None
     riesgo: str | None = Field(default=None, validation_alias="poliza_codio_objeto_asegurado")

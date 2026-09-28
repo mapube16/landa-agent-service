@@ -30,10 +30,10 @@ def test_get_info_general_schema_excludes_poliza_id() -> None:
 async def test_get_info_general_maps_and_sanitizes(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Maps upstream field names (aseguradora, riesgo) and enriches with cartera."""
     import json
-    from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
     import app.features.qa.tools as tools_mod
+    from app.models.softseguros import CarteraStatus
 
     ss = MagicMock()
     ss.get_poliza = AsyncMock(
@@ -50,8 +50,8 @@ async def test_get_info_general_maps_and_sanitizes(monkeypatch) -> None:  # type
             "campo_prohibido": "secreto",
         }
     )
-    ss.get_cartera_status = AsyncMock(
-        return_value=SimpleNamespace(saldo_pendiente="0.00", fecha_realizara_pago=None)
+    ss.get_cuotas_pendientes = AsyncMock(
+        return_value=[CarteraStatus(fecha_pago="2020-01-27", valor_a_pagar="226676.00")]
     )
     monkeypatch.setattr(tools_mod, "get_softseguros_client", lambda: ss)
 
@@ -60,7 +60,7 @@ async def test_get_info_general_maps_and_sanitizes(monkeypatch) -> None:  # type
     assert parsed["aseguradora"] == "PREVISORA"
     assert parsed["riesgo_asegurado"] == "ZVL663"
     assert parsed["estado_poliza_nombre"] == "Devengada"
-    assert parsed["saldo_pendiente"] == "0.00"
+    assert parsed["saldo_pendiente"] == 226676
     assert "campo_prohibido" not in parsed
 
 
@@ -148,3 +148,24 @@ def test_system_prompt_omits_lock_when_no_poliza() -> None:
     result = system_prompt(kb_content="== REFERENCIA ==\nx\n== FIN REFERENCIA ==", poliza_id=None)
     assert "ESTÁS RESPONDIENDO SOBRE LA PÓLIZA" not in result
     assert "no puedes cambiar" not in result.lower()
+
+
+def test_resumen_saldo_suma_vencidas_y_separa_proxima() -> None:
+    from app.features.qa.tools import resumen_saldo
+    from app.models.softseguros import CarteraStatus
+
+    cuotas = [
+        CarteraStatus(fecha_pago="2026-08-27", valor_a_pagar="100.00"),
+        CarteraStatus(fecha_pago="2026-09-27", valor_a_pagar="100.50"),
+        CarteraStatus(fecha_pago="2026-10-27", valor_a_pagar="300.00"),
+    ]
+    r = resumen_saldo(cuotas, hoy="2026-09-27")
+    assert r["saldo_pendiente"] == 200
+    assert r["cuotas_pendientes"] == 2
+    assert r["pendiente_desde"] == "2026-08-27"
+    assert (r["proximo_pago_monto"], r["proximo_pago_fecha"]) == (300, "2026-10-27")
+
+    solo_futuras = resumen_saldo(cuotas[2:], hoy="2026-09-27")
+    assert solo_futuras["saldo_pendiente"] == 0
+    assert solo_futuras["pendiente_desde"] is None
+    assert resumen_saldo([], hoy="2026-09-27")["saldo_pendiente"] == 0

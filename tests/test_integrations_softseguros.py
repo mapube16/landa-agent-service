@@ -404,33 +404,44 @@ async def test_get_polizas_by_cliente_returns_results_list(
 async def test_get_cartera_status_returns_first_row_whitelisted(
     mocked_client: Any, stub_http: MagicMock, stub_redis: MagicMock
 ) -> None:
-    """Cache miss → routes to the fast endpoint; returns row[0] trimmed to CarteraStatus."""
+    """Busca por numero_poliza, filtra por id exacto y recorta a CarteraStatus.
+
+    Probe 27-sep: la búsqueda es por subcadena y trae renovaciones anteriores
+    del mismo número; buscar por id interno devolvía 0 filas siempre.
+    """
     from app.models.softseguros import CarteraStatus
 
     stub_redis.get.return_value = None
     stub_http.post.return_value = _make_response(200, {"token": "tok"})
+    otra_poliza = {"poliza": 999, "fecha_pago": "2025-01-01", "valor_a_pagar": "1.00"}
     raw_row = {
+        "poliza": 123,
         "fecha_pago": "2026-06-01",
         "fecha_realizara_pago": "2026-07-10",
         "fecha_realizo_pago": None,
-        "saldo_pendiente": "150000.00",
+        "saldo_pendiente": None,
+        "valor_a_pagar": "150000.00",
+        "numero_pago": "7",
         "edad_cartera": 36,
         "ramo_nombre": "AUTOMÓVILES",
         "poliza_codio_objeto_asegurado": "LMT78B",
         "poliza_cliente_celular": "3001234567",  # PII — must NOT leak into CarteraStatus
         "comicion": "12000",  # commission — must NOT leak into CarteraStatus
     }
-    stub_http.get.return_value = _make_response(
-        200, {"count": 1, "next": None, "previous": None, "results": [raw_row]}
-    )
+    stub_http.get.side_effect = [
+        _make_response(200, {"id": 123, "numero_poliza": "2104713"}),
+        _make_response(
+            200, {"count": 2, "next": None, "previous": None, "results": [otra_poliza, raw_row]}
+        ),
+    ]
 
-    result = await mocked_client.get_cartera_status("POL123")
+    result = await mocked_client.get_cartera_status("123")
 
     assert result == CarteraStatus(
         fecha_pago="2026-06-01",
         fecha_realizara_pago="2026-07-10",
-        fecha_realizo_pago=None,
-        saldo_pendiente="150000.00",
+        valor_a_pagar="150000.00",
+        numero_pago="7",
         edad_cartera=36,
         ramo_nombre="AUTOMÓVILES",
         riesgo="LMT78B",
@@ -441,7 +452,7 @@ async def test_get_cartera_status_returns_first_row_whitelisted(
     assert call_args.args[0] == "/api/pagopoliza/list_pagospolizas_filtro_paginados/"
     params = call_args.kwargs.get("params")
     assert params["sede"] == 1047
-    assert params["texto_busqueda"] == "POL123"
+    assert params["texto_busqueda"] == "2104713"
     assert params["search_in"] == "poliza_numero_poliza"
     assert params["tipo"] == "cartera_por_cobrar"
 
@@ -453,11 +464,12 @@ async def test_get_cartera_status_returns_none_when_no_results(
     """No cartera pendiente (count=0) → None, not an empty CarteraStatus."""
     stub_redis.get.return_value = None
     stub_http.post.return_value = _make_response(200, {"token": "tok"})
-    stub_http.get.return_value = _make_response(
-        200, {"count": 0, "next": None, "previous": None, "results": []}
-    )
+    stub_http.get.side_effect = [
+        _make_response(200, {"id": 999, "numero_poliza": "555"}),
+        _make_response(200, {"count": 0, "next": None, "previous": None, "results": []}),
+    ]
 
-    result = await mocked_client.get_cartera_status("POL999")
+    result = await mocked_client.get_cartera_status("999")
 
     assert result is None
 

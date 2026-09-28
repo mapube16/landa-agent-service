@@ -47,6 +47,7 @@ METHOD_ALLOWLIST: frozenset[str] = frozenset(
         "get_cliente",
         "get_estado",
         "get_cartera_status",  # Fase 6: replaces the old 504 get_pagos
+        "get_cuotas_pendientes",  # cuotas sin pagar (saldo real), 27-sep
         "get_clientes_by_documento",  # Plan 03-02: D-01 identification by document
         "get_polizas_by_cliente",  # Plan 03-02: secondary poliza call (two-call pattern)
     }

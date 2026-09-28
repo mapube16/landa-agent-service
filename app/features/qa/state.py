@@ -93,6 +93,7 @@ class QAState(TypedDict, total=False):
     asked_for_doc: bool  # True after T-01 emitted; prevents SoftSeguros call on greeting
     polizas_page: int  # current page (0-based) when N>10, advanced by "__more" button
     choice_retries: NotRequired[int]  # failed policy-selection attempts (escalate at 2)
+    tiene_saldo: NotRequired[bool]  # la póliza tiene cuotas vencidas: se ofrece "Saldo"
     # --- Phase 4 payment fields ---
     case_id: NotRequired[str | None]
     attachment_count: NotRequired[int]

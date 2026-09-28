@@ -566,3 +566,31 @@ async def test_node_answer_escalate_tool_called_escalates() -> None:
     assert result["node"] == "escalating"
     assert result.get("escalation_reason") == "escape_hatch"
     assert any(T_08 in str(m.content) for m in result["messages"])
+
+
+@pytest.mark.asyncio
+async def test_menu_ofrece_saldo_solo_si_hay_saldo() -> None:
+    from app.features.qa.nodes import node_identify
+    from app.models.softseguros import CarteraStatus
+
+    poliza = {"id": 101, "numero_poliza": "2104713", "fecha_fin": "2999-01-01"}
+
+    async def run(cuotas: list[CarteraStatus]) -> dict:  # type: ignore[type-arg]
+        mock_client = MagicMock()
+        mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 1})
+        mock_client.get_polizas_by_cliente = AsyncMock(return_value=[poliza])
+        mock_client.get_cuotas_pendientes = AsyncMock(return_value=cuotas)
+        state = _make_state(messages=[HumanMessage(content="12345678")])
+        with patch("app.features.qa.nodes.get_softseguros_client", return_value=mock_client):
+            return await node_identify(state)  # type: ignore[arg-type]
+
+    con_saldo = await run([CarteraStatus(fecha_pago="2020-01-27", valor_a_pagar="226676.00")])
+    msg = con_saldo["messages"][0]
+    assert con_saldo["tiene_saldo"] is True
+    assert "$226.676" in msg.content
+    assert ("saldo", "Saldo") in msg.additional_kwargs["interactive"]["buttons"]
+
+    sin_saldo = await run([CarteraStatus(fecha_pago="2999-01-27", valor_a_pagar="226676.00")])
+    botones = sin_saldo["messages"][0].additional_kwargs["interactive"]["buttons"]
+    assert sin_saldo["tiene_saldo"] is False
+    assert all(bid != "saldo" for bid, _ in botones)

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import date
 from typing import Any
 
 import pybreaker
@@ -40,6 +39,8 @@ from app.features.qa.tools import (
     get_estado,
     get_info_general,
     get_saldo,
+    hoy_co,
+    resumen_saldo,
 )
 from app.integrations.openrouter import get_llm
 from app.integrations.softseguros import get_softseguros_client
@@ -189,7 +190,7 @@ def _vigentes_unicas(polizas: list[dict[str, Any]]) -> list[dict[str, Any]]:
     pólizas vencidas quedan como "Devengada" (un cliente real tenía 10+
     "Devengada" y ninguna "Vigente"). Sin ``fecha_fin`` se usa el estado.
     """
-    hoy = date.today().isoformat()
+    hoy = hoy_co()
     vigentes = []
     for p in polizas:
         estado = str(p.get("estado_poliza_nombre", p.get("estado", ""))).strip().upper()
@@ -255,14 +256,73 @@ def _polizas_list_message(polizas: list[dict[str, Any]], page: int) -> AIMessage
     )
 
 
-def _qa_menu_message(numero: str) -> AIMessage:
-    """3-button menu after a poliza is locked: saldo / estado / coberturas.
+_MESES = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+    "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+)  # fmt: skip
+
+
+def _fecha_larga(iso: str) -> str:
+    """'2026-09-27' -> '27 de septiembre'."""
+    y, m, d = (int(x) for x in iso[:10].split("-"))
+    return f"{d} de {_MESES[m - 1]}"
+
+
+def _pesos(monto: int) -> str:
+    return "$" + f"{monto:,}".replace(",", ".")
+
+
+def _texto_saldo(saldo: dict[str, Any]) -> str:
+    """Frase del saldo para el mensaje de entrada, o '' si no hay saldo."""
+    monto, n, desde = saldo["saldo_pendiente"], saldo["cuotas_pendientes"], saldo["pendiente_desde"]
+    if not monto or not desde:
+        return ""
+    if n == 1:
+        cuando = "vence hoy" if desde == hoy_co() else f"venció el {_fecha_larga(desde)}"
+        return f"Tienes una cuota pendiente de {_pesos(monto)} que {cuando}."
+    return (
+        f"Tienes {n} cuotas pendientes por {_pesos(monto)}, "
+        f"la primera desde el {_fecha_larga(desde)}."
+    )
+
+
+async def _saldo_de(poliza_id: str) -> dict[str, Any] | None:
+    """Resumen de saldo de la póliza, o ``None`` si SoftSeguros falla.
+
+    Fail-closed para el botón: si no sabemos el saldo, no ofrecemos "Saldo"
+    (antes el botón siempre salía y Aria nunca podía responderlo).
+    """
+    try:
+        cuotas = await get_softseguros_client().get_cuotas_pendientes(poliza_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("qa.saldo.lookup_failed", error_type=type(exc).__name__)
+        return None
+    return resumen_saldo(cuotas)
+
+
+def _menu_buttons(tiene_saldo: bool, after_answer: bool) -> list[tuple[str, str]]:
+    """Botones rápidos (Meta: máx. 3). "Saldo" solo si la póliza tiene saldo."""
+    if tiene_saldo:
+        tercero = ("agente", "Hablar humano") if after_answer else ("info_general", "Información")
+        return [("saldo", "Saldo"), ("estado", "Estado"), tercero]
+    return [("estado", "Estado"), ("info_general", "Información"), ("agente", "Hablar humano")]
+
+
+def _qa_menu_message(numero: str, saldo: dict[str, Any] | None = None) -> AIMessage:
+    """Menú al fijar la póliza. Si hay saldo, se dice de entrada y se ofrece
+    el botón "Saldo"; si no, el botón no aparece.
 
     User can also type freely — buttons are a shortcut, not the only path.
     """
-    body = (
-        f"Listo, sobre la póliza POL-{numero}. ¿Qué quieres saber?"
-        " Toca una opción o escribe tu pregunta."
+    texto_saldo = _texto_saldo(saldo) if saldo else ""
+    body = " ".join(
+        x
+        for x in (
+            f"Listo, sobre la póliza POL-{numero}.",
+            texto_saldo,
+            "¿Qué quieres saber? Toca una opción o escribe tu pregunta.",
+        )
+        if x
     )
     return AIMessage(
         content=body,
@@ -270,15 +330,24 @@ def _qa_menu_message(numero: str) -> AIMessage:
             "interactive": {
                 "kind": "buttons",
                 "body": body,
-                "buttons": [
-                    ("saldo", "Saldo"),
-                    ("estado", "Estado"),
-                    ("info_general", "Información"),
-                ],
+                "buttons": _menu_buttons(bool(texto_saldo), after_answer=False),
             },
             "send_to_client": True,
         },
     )
+
+
+async def _lock_poliza(p: dict[str, Any]) -> dict[str, Any]:
+    """Estado + menú al fijar la póliza ``p`` (poliza_id lockeado en state)."""
+    poliza_id = str(p.get("id", p.get("numero_poliza", "")))
+    numero = p.get("numero_poliza", poliza_id)
+    saldo = await _saldo_de(poliza_id)
+    return {
+        "node": "answering_qa",
+        "poliza_id": poliza_id,
+        "tiene_saldo": bool(saldo and _texto_saldo(saldo)),
+        "messages": [_qa_menu_message(numero, saldo)],
+    }
 
 
 def _retry_or_escalate(doc_retries: int, text: str) -> dict[str, Any]:
@@ -462,14 +531,10 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
             None,
         )
         if match is not None:
-            poliza_id = str(match.get("id", match.get("numero_poliza", "")))
-            numero = match.get("numero_poliza", poliza_id)
             return {
-                "node": "answering_qa",
-                "poliza_id": poliza_id,
+                **await _lock_poliza(match),
                 "cliente_doc": doc_input,
                 "polizas_list": polizas,
-                "messages": [_qa_menu_message(numero)],
             }
 
     polizas = _vigentes_unicas(polizas)
@@ -483,15 +548,10 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
         }
 
     if len(polizas) == 1:
-        p = polizas[0]
-        poliza_id = str(p.get("id", p.get("numero_poliza", "")))
-        numero = p.get("numero_poliza", poliza_id)
         return {
-            "node": "answering_qa",
-            "poliza_id": poliza_id,
+            **await _lock_poliza(polizas[0]),
             "cliente_doc": doc_input,
             "polizas_list": polizas,
-            "messages": [_qa_menu_message(numero)],
         }
 
     # N >= 2 — interactive list (Meta limits 10 rows; we page in chunks of 9).
@@ -672,13 +732,7 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:  # noqa: C901
             "messages": [_polizas_list_message(polizas, page=page)],
         }
 
-    poliza_id = str(resolved.get("id", resolved.get("numero_poliza", "")))
-    numero = resolved.get("numero_poliza", poliza_id)
-    return {
-        "node": "answering_qa",
-        "poliza_id": poliza_id,
-        "messages": [_qa_menu_message(numero)],
-    }
+    return await _lock_poliza(resolved)
 
 
 def route_from_policy_choice(state: QAState) -> str:
@@ -845,11 +899,7 @@ async def node_answer(state: QAState) -> dict[str, Any]:
                     "interactive": {
                         "kind": "buttons",
                         "body": final_response,
-                        "buttons": [
-                            ("saldo", "Saldo"),
-                            ("estado", "Estado"),
-                            ("agente", "Hablar humano"),
-                        ],
+                        "buttons": _menu_buttons(bool(state.get("tiene_saldo")), after_answer=True),
                     },
                 },
             )
