@@ -34,22 +34,28 @@ contestadas — ese se queda como está).
   "user_id": "agente-voz-7",                            // quién cedió (auditoría)
   "phone": "+573001234567",                             // E.164, obligatorio
   "initial_context": "Cliente dice que ya pagó pero no encuentra el comprobante.",
-  "message": "Hola, soy el asistente de DPG. Vi que hablaste con..."  // 1er mensaje opcional
+  "message": "Hola, soy el asistente de DPG. Vi que hablaste con...",  // 1er mensaje opcional
+  "documento": "41942034",                              // cliente_documento: fija la póliza sin pedir cédula
+  "cliente_nombre": "Juan Pérez"
 }
 ```
 
 **Validaciones WA:** `phone` E.164 (`^\+\d{8,15}$`), `case_id` UUID válido,
 `poliza_number` 1-40 chars. Campos opcionales: `call_id`, `user_id`,
-`initial_context`, `message`.
+`initial_context`, `message`, `documento`, `cliente_nombre`.
 
 **Comportamiento WA:**
-1. Idempotencia por `case_id` (PK de `cases`). Retransmisión → `200 {sent:false}`,
-   sin duplicar caso ni reenviar mensaje.
+1. Idempotencia por `(case_id, call_id, message)` (Redis, 24h). VOICE reutiliza
+   el `case_id` del deudor en todas sus llamadas, así que un mensaje nuevo del
+   mismo caso SÍ se envía; solo la retransmisión idéntica → `200 {sent:false}`.
 2. Crea/actualiza el Case: `status="awaiting_receipt"`, guarda `poliza_id`,
    `phone`, y anexa `call_id` a `call_ids[]` (ver extensión de esquema abajo).
 3. Si viene `message`, lo envía al cliente por WhatsApp (template si la ventana
    24h está cerrada; freeform si abierta). Si no, WA usa su saludo default.
-4. Registra evento de audit (`action="handoff_received"`, actor="voice").
+4. Resetea y siembra el hilo QA: póliza llamada + `documento` (identifica sin
+   pedir cédula y fija SOLO esa póliza), `initial_context` al system prompt y
+   `message` como primer turno de ARIA en el historial.
+5. Registra evento de audit (`action="handoff_received"`, actor="voice").
 
 **Responses:**
 | Código | Body | Cuándo |

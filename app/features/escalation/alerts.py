@@ -56,6 +56,11 @@ async def notify_team_escalation(
         "doc_exhausted": "no se pudo identificar al cliente",
         "judge_exhausted": "el asistente no pudo dar una respuesta validada",
         "breaker": "falla técnica consultando SoftSeguros",
+        "faq_link_pago": "el cliente pide link o cupón de pago",
+        "faq_recibo_paz_y_salvo": "el cliente pide recibo / paz y salvo / copia de la póliza",
+        "faq_siniestro": "el cliente reporta un siniestro o reclamación",
+        "faq_deducible": "el cliente pregunta por deducible o costos",
+        "faq_cotizar": "el cliente quiere cotizar o una póliza nueva (comercial)",
     }.get(reason or "", reason or "solicitud de atención humana")
 
     # Private note inside the Chatwoot conversation (team sees it in context).

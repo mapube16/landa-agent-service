@@ -125,6 +125,10 @@ class QAState(TypedDict, total=False):
     # also resolves the SoftSeguros id, poliza_id is seeded directly and the
     # identification step is skipped entirely.
     handoff_numero_poliza: NotRequired[str | None]
+    handoff_poliza_hint: NotRequired[str | None]
+    # Por qué la voz contactó al cliente (POST /case/handoff initial_context).
+    # Va al system prompt para que ARIA explique el motivo en vez de sonar plana.
+    handoff_contexto: NotRequired[str | None]
 
 
 __all__ = ["QAState"]

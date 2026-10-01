@@ -45,3 +45,5 @@ build/
 /lista_terremoto.csv.*
 /Informe_*.pdf
 /perdidos_24h.json*
+
+scratch/

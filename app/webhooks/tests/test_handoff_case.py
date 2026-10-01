@@ -84,6 +84,15 @@ async def client(meta: MagicMock, session: _FakeSession) -> AsyncIterator[AsyncC
     app.state.redis = MagicMock()  # bare mock: check_rate_limit's own eval() call
     # raises on it (not an AsyncMock) -> caught by _check_handoff_rate_limit's
     # fail-open except, same real-world behavior as a genuinely down Redis.
+    seen: set[bytes] = set()
+
+    async def _set_nx(key: bytes, *_: Any, **__: Any) -> bool | None:
+        if key in seen:
+            return None
+        seen.add(key)
+        return True
+
+    app.state.redis.set = _set_nx
 
     @asynccontextmanager
     async def factory() -> AsyncIterator[_FakeSession]:
@@ -173,3 +182,52 @@ async def test_idempotent_second_call_skips_send(
     assert r2.json()["sent"] is False
     assert meta.send_text.call_count == 1
     assert len(session.added) == 1
+
+
+async def test_same_case_new_message_is_sent(
+    client: AsyncClient, meta: MagicMock, session: _FakeSession
+) -> None:
+    """VOICE reusa el case_id del deudor en cada llamada: un mensaje nuevo del
+    mismo caso debe enviarse (antes se descartaba en silencio)."""
+    await client.post("/case/handoff", json=_body(), headers=AUTH)
+    r2 = await client.post(
+        "/case/handoff", json=_body(call_id="CA-2", message="Otro mensaje"), headers=AUTH
+    )
+
+    assert r2.json()["sent"] is True
+    assert meta.send_text.call_count == 2
+    assert len(session.added) == 1
+    assert session.added[0].call_ids == ["twilio-CAxxxx", "CA-2"]
+
+
+async def test_thread_kept_for_same_poliza_reset_for_other(
+    client: AsyncClient, session: _FakeSession
+) -> None:
+    """Dos handoffs de la misma póliza no borran el hilo; otra póliza sí."""
+    state: dict[str, Any] = {"channel_values": {}}
+    deletes: list[str] = []
+
+    async def _aget(cfg: Any) -> Any:
+        return state if state["channel_values"] else None
+
+    async def _adelete(tid: str) -> None:
+        deletes.append(tid)
+        state["channel_values"] = {}
+
+    async def _aupdate(cfg: Any, values: Any, as_node: Any = None) -> None:
+        state["channel_values"].update(values)
+
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.state.checkpointer = MagicMock(aget=_aget, adelete_thread=_adelete)
+    app.state.qa_graph = MagicMock(aupdate_state=_aupdate)
+
+    await client.post("/case/handoff", json=_body(), headers=AUTH)
+    await client.post("/case/handoff", json=_body(call_id="CA-2", message="m2"), headers=AUTH)
+    assert deletes == []
+    assert state["channel_values"]["handoff_numero_poliza"] == "POL-000123"
+
+    await client.post(
+        "/case/handoff", json=_body(call_id="CA-3", poliza_number="POL-999"), headers=AUTH
+    )
+    assert deletes == [PHONE]
+    assert state["channel_values"]["handoff_numero_poliza"] == "POL-999"

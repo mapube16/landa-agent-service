@@ -19,6 +19,7 @@ PII (T-04-07-03): only the hashed phone is logged; ``cliente_nombre`` never.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import uuid
 
@@ -76,8 +77,12 @@ class CaseHandoff(BaseModel):
     phone: str = Field(pattern=r"^\+\d{8,15}$")
     call_id: str | None = None
     user_id: str | None = None
-    initial_context: str | None = None
+    initial_context: str | None = Field(default=None, max_length=500)
     message: str | None = None
+    # Sin documento WA no puede identificar al cliente y le pide la cédula /
+    # le lista TODAS sus pólizas en vez de la que se llamó.
+    documento: str | None = Field(default=None, max_length=20)
+    cliente_nombre: str | None = Field(default=None, max_length=80)
 
 
 def _verify_bearer(authorization: str | None = Header(None)) -> None:
@@ -162,7 +167,13 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
         f"{body.cliente_nombre} — botones: Sí, ayúdenme / Más tarde]",
     )
 
-    await _seed_qa_thread(request, body)
+    await _seed_qa_thread(
+        request,
+        phone=body.phone,
+        numero_poliza=body.numero_poliza,
+        cliente_nombre=body.cliente_nombre,
+        documento=body.documento,
+    )
 
     return {"case_id": case_id, "sent": True}
 
@@ -208,11 +219,45 @@ async def link_cupon(body: LinkCuponRequest, request: Request) -> dict[str, str 
         f"cartera debe enviar el {tipo_txt} real por este chat]",
     )
 
-    await _seed_qa_thread(request, body)
+    await _seed_qa_thread(
+        request,
+        phone=body.phone,
+        numero_poliza=body.numero_poliza,
+        cliente_nombre=body.cliente_nombre,
+        documento=body.documento,
+    )
     return {"case_id": str(body.case_id), "sent": True}
 
 
-async def _seed_qa_thread(request: Request, body: NoAnswerHandoff) -> None:
+async def _thread_is_for(checkpointer: object, phone: str, numero_poliza: str) -> bool | None:
+    """None si no hay hilo; True si ya es un handoff por esta misma póliza.
+
+    Si leer el checkpoint falla se asume "otra póliza" (reset, el comportamiento
+    de siempre) en vez de dejar estado viejo.
+    """
+    try:
+        existing = await checkpointer.aget({"configurable": {"thread_id": phone}})  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("handoff.thread_peek_failed", error_type=type(exc).__name__)
+        return False
+    if existing is None:
+        return None
+    values = existing.get("channel_values", {})
+    return bool(values.get("handoff_numero_poliza")) and str(
+        values["handoff_numero_poliza"]
+    ) == str(numero_poliza)
+
+
+async def _seed_qa_thread(
+    request: Request,
+    *,
+    phone: str,
+    numero_poliza: str,
+    cliente_nombre: str | None,
+    documento: str | None,
+    contexto: str | None = None,
+    mensaje: str | None = None,
+) -> None:
     """Seed the QA thread with the handoff context (fail-open).
 
     Always seeds ``cliente_nombre`` + ``handoff_numero_poliza`` so the
@@ -234,36 +279,54 @@ async def _seed_qa_thread(request: Request, body: NoAnswerHandoff) -> None:
     checkpointer = getattr(request.app.state, "checkpointer", None)
     if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
         try:
-            await checkpointer.adelete_thread(body.phone)
-            log.info("handoff.no_answer.thread_reset", phone_hash=_hash_phone(body.phone))
+            # Misma póliza = misma conversación: la voz manda varios handoffs
+            # por llamada (mensaje2 del pago, send_whatsapp del modelo); borrar
+            # el hilo en cada uno perdía el mensaje anterior y cualquier
+            # comprobante en curso. Solo se reinicia al cambiar de póliza.
+            keep = await _thread_is_for(checkpointer, phone, numero_poliza)
+            if keep is None:
+                log.info("handoff.thread_empty", phone_hash=_hash_phone(phone))
+            elif keep:
+                log.info("handoff.thread_kept", phone_hash=_hash_phone(phone))
+            else:
+                await checkpointer.adelete_thread(phone)
+                log.info("handoff.no_answer.thread_reset", phone_hash=_hash_phone(phone))
         except Exception as exc:  # noqa: BLE001
             log.warning("handoff.no_answer.thread_reset_failed", error_type=type(exc).__name__)
 
     seed: dict[str, object] = {
-        "wa_phone": body.phone.lstrip("+"),
-        "cliente_nombre": body.cliente_nombre,
-        "handoff_numero_poliza": body.numero_poliza,
+        "wa_phone": phone.lstrip("+"),
+        "cliente_nombre": cliente_nombre,
+        "handoff_numero_poliza": numero_poliza,
     }
+    if contexto:
+        seed["handoff_contexto"] = contexto
+    if mensaje:
+        # Lo que ARIA ya le escribió desde la llamada entra al historial: sin
+        # esto el LLM no sabía qué se le dijo al cliente ni por qué.
+        from langchain_core.messages import AIMessage
 
-    if body.documento:
+        seed["messages"] = [AIMessage(content=mensaje)]
+
+    if documento:
         # La voz llamó a esta persona por su póliza: YA tenemos su documento,
         # NO debemos volver a pedírselo (decisión cliente 2026-07-29). Seedeamos
         # cliente_doc + handoff_poliza_hint; node_identify los usa al primer
         # mensaje para identificar directo (documento) y lockear la póliza del
         # payload si aparece — sin preguntar nada.
-        seed["cliente_doc"] = body.documento
-        seed["handoff_poliza_hint"] = body.numero_poliza
+        seed["cliente_doc"] = documento
+        seed["handoff_poliza_hint"] = numero_poliza
 
     try:
         await qa_graph.aupdate_state(
-            {"configurable": {"thread_id": body.phone}},
+            {"configurable": {"thread_id": phone}},
             values=seed,
             as_node=None,
         )
         log.info(
             "handoff.no_answer.qa_thread_seeded",
-            phone_hash=_hash_phone(body.phone),
-            poliza_locked="poliza_id" in seed,
+            phone_hash=_hash_phone(phone),
+            poliza_hint="handoff_poliza_hint" in seed,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("handoff.no_answer.seed_failed", error_type=type(exc).__name__)
@@ -288,23 +351,38 @@ async def case_handoff(body: CaseHandoff, request: Request) -> dict[str, str | b
     session_factory = request.app.state.session_factory
     case_id = str(body.case_id)
 
+    # Idempotencia por (case_id, call_id, message), NO por case_id: VOICE
+    # reutiliza el case_id del deudor en todas sus llamadas, así que deduplicar
+    # por caso descartaba en silencio cada mensaje después del primero.
+    dedup_raw = f"{case_id}|{body.call_id}|{body.message}".encode()
+    dedup_key = f"handoff:case:{hashlib.sha256(dedup_raw).hexdigest()}".encode()
+    try:
+        first_see = await request.app.state.redis.set(dedup_key, b"1", nx=True, ex=86400)
+    except Exception as exc:  # noqa: BLE001 — Redis caído: mejor enviar que perder el mensaje
+        log.warning("handoff.case.dedup_failed", error_type=type(exc).__name__)
+        first_see = True
+    if not first_see:
+        log.info("handoff.case.idempotent_skip", case_id=case_id)
+        return {"case_id": case_id, "sent": False}
+
     async with session_factory() as session:
         existing = (
             await session.execute(select(Case).where(Case.case_id == case_id))
         ).scalar_one_or_none()
-        if existing is not None:
-            log.info("handoff.case.idempotent_skip", case_id=case_id)
-            return {"case_id": case_id, "sent": False}
-        session.add(
-            Case(
-                case_id=case_id,
-                phone=body.phone,
-                poliza_id=body.poliza_number,
-                status="awaiting_receipt",
-                debtor_id=body.debtor_id,
-                call_ids=[body.call_id] if body.call_id else [],
+        if existing is None:
+            session.add(
+                Case(
+                    case_id=case_id,
+                    phone=body.phone,
+                    cliente_nombre=body.cliente_nombre,
+                    poliza_id=body.poliza_number,
+                    status="awaiting_receipt",
+                    debtor_id=body.debtor_id,
+                    call_ids=[body.call_id] if body.call_id else [],
+                )
             )
-        )
+        elif body.call_id and body.call_id not in (existing.call_ids or []):
+            existing.call_ids = [*(existing.call_ids or []), body.call_id]
         await session.commit()
 
     sent = False
@@ -315,6 +393,20 @@ async def case_handoff(body: CaseHandoff, request: Request) -> dict[str, str | b
         from app.features.payment.nodes import mirror_outgoing_to_chatwoot
 
         await mirror_outgoing_to_chatwoot(body.phone, body.message)
+
+    # La conversación siguiente es sobre ESTA póliza: sin sembrar el hilo, el
+    # cliente respondía y WA arrancaba de cero (pedía cédula / listaba todas).
+    # "N/A" = VOICE no tenía número de póliza; no hay nada que fijar.
+    if body.poliza_number != "N/A":
+        await _seed_qa_thread(
+            request,
+            phone=body.phone,
+            numero_poliza=body.poliza_number,
+            cliente_nombre=body.cliente_nombre,
+            documento=body.documento,
+            contexto=body.initial_context,
+            mensaje=body.message,
+        )
 
     audit_log.emit_task(
         action="handoff_received",

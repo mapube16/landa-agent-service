@@ -29,6 +29,7 @@ import pybreaker
 import structlog
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.features.qa.faq import faq_prompt_section, match_faq
 from app.features.qa.knowledge_base import load_kb
 from app.features.qa.messages import ESCAPE_REGEX, T_01, T_02, T_03, T_06, T_07, T_08
 from app.features.qa.prompts import system_prompt
@@ -404,6 +405,29 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
     # normal toma el control.
     handoff_doc = state.get("cliente_doc") if not state.get("asked_for_doc") else None
 
+    # Pregunta frecuente antes de identificarse ("¿quién me habla?", "cómo hago
+    # la reclamación"): aquí no hay LLM y el bot solo pedía la cédula (visto en
+    # Chatwoot). Con handoff_doc no aplica: ahí identificamos y el LLM responde
+    # con el contexto de la llamada.
+    faq = match_faq(text) if not handoff_doc else None
+    if faq is not None:
+        if faq.escalate:
+            return {
+                "node": "escalating",
+                "escalation_reason": f"faq_{faq.key}",
+                "messages": [AIMessage(content=faq.answer)],
+            }
+        return {
+            "node": "awaiting_identification",
+            "asked_for_doc": True,
+            "messages": [
+                AIMessage(
+                    content=faq.answer
+                    + "\n\nPara revisar tu póliza, ¿me das tu número de documento?"
+                )
+            ],
+        }
+
     # First contact or no document requested yet → emit T-01 and wait.
     # Handoff context (voice call about a known poliza): greet WITH context
     # so the client understands why we ask for their document — a cold T-01
@@ -531,11 +555,18 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
             None,
         )
         if match is not None:
-            return {
+            locked = {
                 **await _lock_poliza(match),
                 "cliente_doc": doc_input,
-                "polizas_list": polizas,
+                # Solo la póliza llamada: el resto no es tema de esta conversación.
+                "polizas_list": [match],
             }
+            # Si el cliente escribió algo real ("¿cuál póliza?", "ya pagué"), el
+            # LLM lo contesta ya con el contexto de la llamada; el menú genérico
+            # lo ignoraba. Los taps de la plantilla sí reciben el menú.
+            if text.strip().lower() not in {"si_ayudenme", "mas_tarde", ""}:
+                locked["messages"] = []
+            return locked
 
     polizas = _vigentes_unicas(polizas)
 
@@ -575,6 +606,11 @@ def route_from_identification(state: QAState) -> str:
 
     if state.get("node") == "escalating":
         return "escalating"
+    # Póliza fijada sin mensaje de salida (handoff): el último mensaje sigue
+    # siendo del cliente, así que se responde en este mismo turno.
+    msgs = state.get("messages", [])
+    if state.get("node") == "answering_qa" and msgs and isinstance(msgs[-1], HumanMessage):
+        return "answering_qa"
     return END
 
 
@@ -772,6 +808,17 @@ async def node_answer(state: QAState) -> dict[str, Any]:
             "messages": [AIMessage(content=T_08)],
         }
 
+    # FAQ que termina en humano (link de pago, recibos, siniestro...): respuesta
+    # fija + escalación, sin LLM ni judge. Las FAQ informativas las contesta el
+    # LLM con el contexto (van en el system prompt).
+    faq = match_faq(_last_human_text(state))
+    if faq is not None and faq.escalate:
+        return {
+            "node": "escalating",
+            "escalation_reason": f"faq_{faq.key}",
+            "messages": [AIMessage(content=faq.answer)],
+        }
+
     poliza_id: str | None = state.get("poliza_id")
     conv_id: str | None = str(state.get("thread_id") or state.get("conversation_id") or "") or None
     judge_retries: int = state.get("judge_retries", 0)
@@ -780,7 +827,14 @@ async def node_answer(state: QAState) -> dict[str, Any]:
     l4_flags = await _fetch_l4_flags(state.get("wa_phone"), poliza_id)
 
     # Build system prompt
-    sp = system_prompt(kb_content=load_kb(), poliza_id=poliza_id, l4_flags=l4_flags)
+    sp = system_prompt(
+        kb_content=load_kb(),
+        poliza_id=poliza_id,
+        l4_flags=l4_flags,
+        contexto_contacto=state.get("handoff_contexto"),
+        numero_poliza_contacto=state.get("handoff_numero_poliza"),
+    )
+    sp += "\n\n" + faq_prompt_section()
     if judge_retries > 0 and last_rationale:
         sp += (
             f"\n\nLa respuesta anterior fue rechazada por el judge: {last_rationale}."

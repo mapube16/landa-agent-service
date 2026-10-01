@@ -130,6 +130,41 @@ async def test_node_identify_handoff_doc_with_poliza_hint_locks_directly() -> No
 
 
 @pytest.mark.asyncio
+async def test_node_identify_handoff_hint_with_question_answers_in_context() -> None:
+    """Handoff + pregunta real ("¿cuál póliza?"): fija SOLO la póliza llamada y
+    encadena al LLM en el mismo turno (antes salía la lista de todas)."""
+    from app.features.qa.nodes import node_identify, route_from_identification
+    from app.features.qa.prompts import system_prompt
+
+    polizas = [
+        {"id": 1, "numero_poliza": "11111", "fecha_fin": "2999-01-01"},
+        {"id": 2, "numero_poliza": "232846", "fecha_fin": "2999-01-01"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 7})
+    mock_client.get_polizas_by_cliente = AsyncMock(return_value=polizas)
+    mock_client.get_cuotas_pendientes = AsyncMock(return_value=[])
+
+    state = _make_state(
+        messages=[HumanMessage(content="Cuál póliza?")],
+        asked_for_doc=False,
+        cliente_doc="41942034",
+        handoff_poliza_hint="232846",
+    )
+    with patch("app.features.qa.nodes.get_softseguros_client", return_value=mock_client):
+        result = await node_identify(state)  # type: ignore[arg-type]
+
+    assert result["poliza_id"] == "2"
+    assert [p["numero_poliza"] for p in result["polizas_list"]] == ["232846"]
+    assert result["messages"] == []
+    merged = {**state, **result, "messages": state["messages"]}
+    assert route_from_identification(merged) == "answering_qa"  # type: ignore[arg-type]
+
+    sp = system_prompt("KB", "2", None, "Cuota vencida, dijo que ya pagó", "232846")
+    assert "Cuota vencida, dijo que ya pagó" in sp and "232846" in sp
+
+
+@pytest.mark.asyncio
 async def test_node_identify_zero_polizas_first_attempt_retries() -> None:
     from app.features.qa.messages import T_02
     from app.features.qa.nodes import node_identify
