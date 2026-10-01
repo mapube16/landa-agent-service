@@ -248,7 +248,7 @@ async def _thread_is_for(checkpointer: object, phone: str, numero_poliza: str) -
     ) == str(numero_poliza)
 
 
-async def _seed_qa_thread(
+async def _seed_qa_thread(  # noqa: C901
     request: Request,
     *,
     phone: str,
@@ -294,11 +294,16 @@ async def _seed_qa_thread(
         except Exception as exc:  # noqa: BLE001
             log.warning("handoff.no_answer.thread_reset_failed", error_type=type(exc).__name__)
 
+    # "N/A" = VOICE no tenía número de póliza (deudor incompleto). Sembrarlo
+    # producía el saludo "tu póliza POL-N/A" (visto en vivo 30-sep).
+    if numero_poliza.strip().upper() in {"", "N/A"}:
+        numero_poliza = ""
     seed: dict[str, object] = {
         "wa_phone": phone.lstrip("+"),
         "cliente_nombre": cliente_nombre,
-        "handoff_numero_poliza": numero_poliza,
     }
+    if numero_poliza:
+        seed["handoff_numero_poliza"] = numero_poliza
     if contexto:
         seed["handoff_contexto"] = contexto
     if mensaje:
@@ -315,7 +320,8 @@ async def _seed_qa_thread(
         # mensaje para identificar directo (documento) y lockear la póliza del
         # payload si aparece — sin preguntar nada.
         seed["cliente_doc"] = documento
-        seed["handoff_poliza_hint"] = numero_poliza
+        if numero_poliza:
+            seed["handoff_poliza_hint"] = numero_poliza
 
     try:
         await qa_graph.aupdate_state(
@@ -396,17 +402,15 @@ async def case_handoff(body: CaseHandoff, request: Request) -> dict[str, str | b
 
     # La conversación siguiente es sobre ESTA póliza: sin sembrar el hilo, el
     # cliente respondía y WA arrancaba de cero (pedía cédula / listaba todas).
-    # "N/A" = VOICE no tenía número de póliza; no hay nada que fijar.
-    if body.poliza_number != "N/A":
-        await _seed_qa_thread(
-            request,
-            phone=body.phone,
-            numero_poliza=body.poliza_number,
-            cliente_nombre=body.cliente_nombre,
-            documento=body.documento,
-            contexto=body.initial_context,
-            mensaje=body.message,
-        )
+    await _seed_qa_thread(
+        request,
+        phone=body.phone,
+        numero_poliza=body.poliza_number,
+        cliente_nombre=body.cliente_nombre,
+        documento=body.documento,
+        contexto=body.initial_context,
+        mensaje=body.message,
+    )
 
     audit_log.emit_task(
         action="handoff_received",

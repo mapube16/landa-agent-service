@@ -231,3 +231,21 @@ async def test_thread_kept_for_same_poliza_reset_for_other(
     )
     assert deletes == [PHONE]
     assert state["channel_values"]["handoff_numero_poliza"] == "POL-999"
+
+
+async def test_poliza_na_no_se_siembra(client: AsyncClient) -> None:
+    """VOICE sin número de póliza manda "N/A": no debe llegar al saludo."""
+    seeded: dict[str, Any] = {}
+
+    async def _aupdate(cfg: Any, values: Any, as_node: Any = None) -> None:
+        seeded.update(values)
+
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.state.qa_graph = MagicMock(aupdate_state=_aupdate)
+
+    await client.post(
+        "/case/handoff", json=_body(poliza_number="N/A", documento="1022446283"), headers=AUTH
+    )
+    assert "handoff_numero_poliza" not in seeded
+    assert "handoff_poliza_hint" not in seeded
+    assert seeded["cliente_doc"] == "1022446283"
