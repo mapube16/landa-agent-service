@@ -96,7 +96,12 @@ async def notify_team_escalation(
         except Exception as exc:  # noqa: BLE001
             log.warning("escalation_alert.dedupe_failed", error_type=type(exc).__name__)
 
+    # Las fallas técnicas van al operador (TECH_ALERT_PHONE), no a cartera:
+    # cartera no puede hacer nada con "OpenRouter 401". La nota en Chatwoot
+    # sí se deja, porque el cliente quedó esperando a un humano.
     cartera_list = list(settings.payment.cartera_phone_allowlist)
+    if reason in TECH_REASONS and settings.payment.tech_alert_phone.startswith("+"):
+        cartera_list = [settings.payment.tech_alert_phone]
     if not cartera_list:
         log.warning("escalation_alert.no_cartera_configured")
         return
@@ -129,4 +134,7 @@ async def notify_team_escalation(
         log.warning("escalation_alert.send_failed", error_type=type(exc).__name__)
 
 
-__all__ = ["ALERT_DEDUPE_SECONDS", "notify_team_escalation"]
+# Motivos que son del operador, no de cartera (ver TECH_ALERT_PHONE).
+TECH_REASONS = frozenset({"graph_error"})
+
+__all__ = ["ALERT_DEDUPE_SECONDS", "TECH_REASONS", "notify_team_escalation"]

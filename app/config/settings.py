@@ -250,6 +250,10 @@ class PaymentSettings(BaseSettings):
 
     # Top-level env name (no prefix) — read via alias.
     cartera_phone_allowlist_raw: str = Field(default="", alias="CARTERA_PHONE_ALLOWLIST")
+    # TECH_ALERT_PHONE — a quién le llegan las fallas técnicas del bot (LLM
+    # caído, excepción del grafo). Es del operador, no de cartera. Vacío →
+    # caen a cartera para no perderlas.
+    tech_alert_phone: str = Field(default="", alias="TECH_ALERT_PHONE")
     # PAYMENT_VOLUME_PATH — path to Railway volume for comprobantes.
     volume_path: Path = Field(default=Path("/data/comprobantes"))
     # META_TEMPLATE_NO_ANSWER_NAME — template name for "no answer" flow (D-22).
