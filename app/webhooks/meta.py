@@ -284,6 +284,19 @@ async def _graph_failure_fallback(app_state: Any, phone: str, redis: Any) -> Non
             from app.features.escalation.mute import set_escalated
 
             await set_escalated(redis, phone)
+        # Sin esto, una falla sistémica pasa desapercibida: el LLM estuvo caído
+        # 10 días (OpenRouter 401 desde el 20-oct) y nadie se enteró porque el
+        # cliente recibía este texto y el equipo ninguna alerta. Deduplicada
+        # 30 min por cliente dentro de notify_team_escalation.
+        from app.features.escalation.alerts import notify_team_escalation
+
+        await notify_team_escalation(
+            app_state.meta,
+            redis,
+            client_phone=phone,
+            reason="graph_error",
+            chatwoot=getattr(app_state, "chatwoot", None),
+        )
     except Exception as exc:  # noqa: BLE001
         log.error("qa_graph.run_failed.fallback_failed", error_type=type(exc).__name__)
 
