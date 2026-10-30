@@ -358,18 +358,26 @@ _DOC_LIKE_RE = re.compile(r"^\s*[\d.\- ]{5,}\s*$")
 def _match_hint(polizas: list[dict[str, Any]], hint: object) -> dict[str, Any] | None:
     """La póliza por la que llamó la voz, si está entre las del cliente.
 
-    Tolera prefijo ``POL-`` y ceros a la izquierda (formatos distintos entre
-    cobranza y SoftSeguros).
+    Cobranza y SoftSeguros no escriben igual el número: la voz manda los 12
+    dígitos (``080001234567``) y SoftSeguros los devuelve con un prefijo de 3
+    (``254080001234567``). Visto en prod 29-oct: el hint nunca coincidía y el
+    cliente recibía la lista completa en vez de su póliza. Se acepta igualdad
+    exacta o que el número de SoftSeguros termine en el de la voz (mínimo 6
+    dígitos para no empatar de más), además de tolerar ``POL-`` y ceros a la
+    izquierda.
     """
     if not hint:
         return None
     hint_num = re.sub(r"(?i)^POL-", "", str(hint)).strip().lstrip("0")
     if not hint_num:
         return None
-    return next(
-        (p for p in polizas if str(p.get("numero_poliza", "")).strip().lstrip("0") == hint_num),
-        None,
-    )
+    numeros = [(p, str(p.get("numero_poliza", "")).strip().lstrip("0")) for p in polizas]
+    exact = next((p for p, n in numeros if n == hint_num), None)
+    if exact is not None or len(hint_num) < 6:
+        return exact
+    por_sufijo = {n: p for p, n in numeros if n.endswith(hint_num)}
+    # ponytail: si dos números distintos terminan igual, mejor listar que adivinar
+    return next(iter(por_sufijo.values())) if len(por_sufijo) == 1 else None
 
 
 def _retry_or_escalate(doc_retries: int, text: str) -> dict[str, Any]:

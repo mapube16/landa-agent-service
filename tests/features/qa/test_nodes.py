@@ -729,3 +729,22 @@ async def test_node_identify_hint_sin_documento_de_voz_fija_al_teclear_cedula() 
     assert result["poliza_id"] == "B"
     # Documento tecleado: sí recibe el menú (no es una pregunta que contestar)
     assert result["messages"] and "POL-232846" in str(result["messages"][0].content)
+
+
+def test_match_hint_tolera_prefijo_de_softseguros() -> None:
+    """La voz manda el número sin el prefijo de 3 dígitos que trae SoftSeguros."""
+    from app.features.qa.nodes import _match_hint
+
+    polizas = [
+        {"id": "1", "numero_poliza": "254080001234567"},
+        {"id": "2", "numero_poliza": "2552000987654321"},
+        {"id": "3", "numero_poliza": "251100000111"},
+    ]
+    assert _match_hint(polizas, "080001234567")["id"] == "1"
+    assert _match_hint(polizas, "POL-2000987654321")["id"] == "2"
+    assert _match_hint(polizas, "251100000111")["id"] == "3"  # exacto sigue ganando
+    assert _match_hint(polizas, "4567") is None  # sufijo corto: no adivinar
+    assert _match_hint(polizas, "999999999") is None
+    # Dos números distintos con el mismo sufijo: ambiguo, mejor listar
+    ambiguas = [{"numero_poliza": "254000123456"}, {"numero_poliza": "255000123456"}]
+    assert _match_hint(ambiguas, "123456") is None
