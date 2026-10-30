@@ -104,11 +104,18 @@ def _max_tokens_for(role: LLMRole) -> int:
     these caps are generous for the actual outputs and bound per-call cost.
     """
     return {
-        "conversation": 1024,
-        "judge": 512,
-        "intent_classifier": 128,
-        "summarizer": 1024,
+        "conversation": 3072,
+        "judge": 2048,
+        "intent_classifier": 1024,
+        "summarizer": 2048,
     }[role]
+
+
+# Gemini 2.5 Pro piensa antes de responder y esos tokens salen del MISMO
+# max_tokens: con 1024 el razonamiento (~800+) se comía el tope y la respuesta
+# llegaba al cliente mutilada (30-oct: ". Si quieres, puedes enviarme...").
+# Se le da un presupuesto propio y el tope total deja espacio a la respuesta.
+_REASONING_MAX_TOKENS = 1024
 
 
 @lru_cache(maxsize=8)
@@ -129,11 +136,13 @@ def _get_llm_resolved(role: LLMRole) -> ChatOpenAI:
         "timeout": 30,
         "max_retries": 2,
     }
+    extra: dict[str, Any] = {"reasoning": {"max_tokens": _REASONING_MAX_TOKENS}}
     if fallbacks:
         # OpenRouter-native multi-model fallback: client posts ``models: [...]``
         # in the request body and OpenRouter cycles through them on upstream
         # failure (RESEARCH.md Pattern 2 + Assumptions Log A8).
-        kwargs["model_kwargs"] = {"models": fallbacks}
+        extra["models"] = fallbacks
+    kwargs["extra_body"] = extra
     return ChatOpenAI(**kwargs)
 
 
