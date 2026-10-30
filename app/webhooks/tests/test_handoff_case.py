@@ -203,7 +203,9 @@ async def test_same_case_new_message_is_sent(
 async def test_thread_kept_for_same_poliza_reset_for_other(
     client: AsyncClient, session: _FakeSession
 ) -> None:
-    """Dos handoffs de la misma póliza no borran el hilo; otra póliza sí."""
+    """Misma póliza: el hilo se re-siembra conservando estado y mensajes
+    (aupdate_state sobre hilo existente falla: InvalidUpdateError en prod).
+    Otra póliza: se reinicia sin arrastrar nada."""
     state: dict[str, Any] = {"channel_values": {}}
     deletes: list[str] = []
 
@@ -215,22 +217,32 @@ async def test_thread_kept_for_same_poliza_reset_for_other(
         state["channel_values"] = {}
 
     async def _aupdate(cfg: Any, values: Any, as_node: Any = None) -> None:
+        assert not state["channel_values"], "solo se siembra sobre hilo vacío"
         state["channel_values"].update(values)
 
     app = client._transport.app  # type: ignore[attr-defined]
     app.state.checkpointer = MagicMock(aget=_aget, adelete_thread=_adelete)
     app.state.qa_graph = MagicMock(aupdate_state=_aupdate)
 
-    await client.post("/case/handoff", json=_body(), headers=AUTH)
+    await client.post("/case/handoff", json=_body(message="m1"), headers=AUTH)
+    state["channel_values"]["poliza_id"] = "77"  # el cliente avanzó en el hilo
     await client.post("/case/handoff", json=_body(call_id="CA-2", message="m2"), headers=AUTH)
-    assert deletes == []
-    assert state["channel_values"]["handoff_numero_poliza"] == "POL-000123"
+    cv = state["channel_values"]
+    assert deletes == [PHONE]
+    assert cv["handoff_numero_poliza"] == "POL-000123"
+    assert cv["poliza_id"] == "77"
+    assert [m.content for m in cv["messages"]] == ["m1", "m2"]
 
     await client.post(
-        "/case/handoff", json=_body(call_id="CA-3", poliza_number="POL-999"), headers=AUTH
+        "/case/handoff",
+        json=_body(call_id="CA-3", poliza_number="POL-999", message="m3"),
+        headers=AUTH,
     )
-    assert deletes == [PHONE]
-    assert state["channel_values"]["handoff_numero_poliza"] == "POL-999"
+    cv = state["channel_values"]
+    assert deletes == [PHONE, PHONE]
+    assert cv["handoff_numero_poliza"] == "POL-999"
+    assert "poliza_id" not in cv
+    assert [m.content for m in cv["messages"]] == ["m3"]
 
 
 async def test_poliza_na_no_se_siembra(client: AsyncClient) -> None:

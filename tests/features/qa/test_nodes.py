@@ -629,3 +629,103 @@ async def test_menu_ofrece_saldo_solo_si_hay_saldo() -> None:
     botones = sin_saldo["messages"][0].additional_kwargs["interactive"]["buttons"]
     assert sin_saldo["tiene_saldo"] is False
     assert all(bid != "saldo" for bid, _ in botones)
+
+
+# ---------------------------------------------------------------------------
+# Captura 29-oct: tap de plantilla + pregunta en "elegir póliza" escalaban
+# ---------------------------------------------------------------------------
+
+_DOS = [
+    {"id": "A", "numero_poliza": "11111", "fecha_fin": "2999-01-01"},
+    {"id": "B", "numero_poliza": "232846", "fecha_fin": "2999-01-01"},
+]
+
+
+@pytest.mark.asyncio
+async def test_node_choose_policy_template_tap_no_cuenta_intento() -> None:
+    from app.features.qa.nodes import node_choose_policy
+
+    state = _make_state(
+        messages=[HumanMessage(content="si_ayudenme")],
+        polizas_list=_DOS,
+        node="awaiting_policy_choice",
+        choice_retries=1,
+    )
+    result = await node_choose_policy(state)  # type: ignore[arg-type]
+    assert result["node"] == "awaiting_policy_choice"
+    assert "choice_retries" not in result
+    assert result["messages"][0].additional_kwargs["interactive"]["kind"] == "list"
+
+
+@pytest.mark.asyncio
+async def test_node_choose_policy_cual_poliza_con_hint_fija_directo() -> None:
+    from app.features.qa.nodes import node_choose_policy
+
+    mock_client = MagicMock()
+    mock_client.get_cuotas_pendientes = AsyncMock(return_value=[])
+    state = _make_state(
+        messages=[HumanMessage(content="Y por cual de las póliza hiciste el contacto conmigo ?")],
+        polizas_list=_DOS,
+        node="awaiting_policy_choice",
+        handoff_numero_poliza="POL-232846",
+    )
+    with patch("app.features.qa.nodes.get_softseguros_client", return_value=mock_client):
+        result = await node_choose_policy(state)  # type: ignore[arg-type]
+    assert result["node"] == "answering_qa"
+    assert result["poliza_id"] == "B"
+    assert result["polizas_list"] == [_DOS[1]]
+
+
+@pytest.mark.asyncio
+async def test_node_choose_policy_cual_poliza_sin_hint_responde_y_relista() -> None:
+    from app.features.qa.nodes import node_choose_policy
+
+    state = _make_state(
+        messages=[HumanMessage(content="Cuál póliza?")],
+        polizas_list=_DOS,
+        node="awaiting_policy_choice",
+    )
+    result = await node_choose_policy(state)  # type: ignore[arg-type]
+    assert result["node"] == "awaiting_policy_choice"
+    assert "choice_retries" not in result
+    msg = result["messages"][0]
+    assert "cartera de DPG" in str(msg.content)
+    assert msg.additional_kwargs["interactive"]["kind"] == "list"
+    assert msg.additional_kwargs["interactive"]["body"] == msg.content
+
+
+@pytest.mark.asyncio
+async def test_node_choose_policy_faq_escalable_escala_con_motivo() -> None:
+    from app.features.qa.nodes import node_choose_policy
+
+    state = _make_state(
+        messages=[HumanMessage(content="Me puedes enviar el link de pago")],
+        polizas_list=_DOS,
+        node="awaiting_policy_choice",
+    )
+    result = await node_choose_policy(state)  # type: ignore[arg-type]
+    assert result["node"] == "escalating"
+    assert result["escalation_reason"] == "faq_link_pago"
+
+
+@pytest.mark.asyncio
+async def test_node_identify_hint_sin_documento_de_voz_fija_al_teclear_cedula() -> None:
+    """Handoff sin documento + cliente teclea cédula: se fija la póliza llamada
+    (captura 30-sep: listaba las 2 y el cliente preguntó "¿cuál póliza?")."""
+    from app.features.qa.nodes import node_identify
+
+    mock_client = MagicMock()
+    mock_client.get_clientes_by_documento = AsyncMock(return_value={"id": 7})
+    mock_client.get_polizas_by_cliente = AsyncMock(return_value=_DOS)
+    mock_client.get_cuotas_pendientes = AsyncMock(return_value=[])
+    state = _make_state(
+        messages=[HumanMessage(content="1022446283")],
+        asked_for_doc=True,
+        handoff_numero_poliza="232846",
+    )
+    with patch("app.features.qa.nodes.get_softseguros_client", return_value=mock_client):
+        result = await node_identify(state)  # type: ignore[arg-type]
+    assert result["node"] == "answering_qa"
+    assert result["poliza_id"] == "B"
+    # Documento tecleado: sí recibe el menú (no es una pregunta que contestar)
+    assert result["messages"] and "POL-232846" in str(result["messages"][0].content)

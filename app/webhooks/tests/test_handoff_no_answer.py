@@ -215,3 +215,27 @@ async def test_idempotent_second_call_skips_send(
     assert r2.json()["sent"] is False
     assert meta.send_template.call_count == 1
     assert len(session.added) == 1
+
+
+async def test_idempotent_retry_still_seeds_and_completes_poliza(
+    client: AsyncClient, meta: MagicMock, session: _FakeSession
+) -> None:
+    """La voz reusa el case_id del deudor: el reintento no manda plantilla,
+    pero SÍ re-siembra el hilo y completa la póliza si el caso quedó en N/A
+    (Maxi 30-sep: primer handoff con N/A y nunca más se actualizó)."""
+    qa_graph = MagicMock()
+    qa_graph.aupdate_state = AsyncMock()
+    client._transport.app.state.qa_graph = qa_graph  # type: ignore[attr-defined]
+
+    await client.post("/case/handoff/no_answer", json=_body(numero_poliza="N/A"), headers=AUTH)
+    r2 = await client.post(
+        "/case/handoff/no_answer", json=_body(documento="18496452"), headers=AUTH
+    )
+
+    assert r2.json()["sent"] is False
+    assert meta.send_template.call_count == 1
+    assert session.added[0].poliza_id == "12345"
+    assert qa_graph.aupdate_state.await_count == 2
+    values = qa_graph.aupdate_state.await_args.kwargs["values"]
+    assert values["handoff_poliza_hint"] == "12345"
+    assert values["cliente_doc"] == "18496452"

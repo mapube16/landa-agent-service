@@ -68,7 +68,7 @@ _QA_BUTTON_IDS = {"saldo", "estado", "coberturas", "info_general", "agente"}
 # Client can't find / doesn't recognize their policy in the list → escalate
 # instead of re-listing forever (bug conv #68).
 _NO_RECONOCE_RE = re.compile(
-    r"no\s+(veo|encuentro|reconozco|s[eé]|aparece)|ninguna|no\s+es\s+esa|cu[aá]l\s+p[oó]liza",
+    r"no\s+(veo|encuentro|reconozco|s[eé]|aparece)|ninguna|no\s+es\s+esa",
     re.IGNORECASE,
 )
 
@@ -351,6 +351,27 @@ async def _lock_poliza(p: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_TEMPLATE_TAPS = {"si_ayudenme", "mas_tarde"}
+_DOC_LIKE_RE = re.compile(r"^\s*[\d.\- ]{5,}\s*$")
+
+
+def _match_hint(polizas: list[dict[str, Any]], hint: object) -> dict[str, Any] | None:
+    """La póliza por la que llamó la voz, si está entre las del cliente.
+
+    Tolera prefijo ``POL-`` y ceros a la izquierda (formatos distintos entre
+    cobranza y SoftSeguros).
+    """
+    if not hint:
+        return None
+    hint_num = re.sub(r"(?i)^POL-", "", str(hint)).strip().lstrip("0")
+    if not hint_num:
+        return None
+    return next(
+        (p for p in polizas if str(p.get("numero_poliza", "")).strip().lstrip("0") == hint_num),
+        None,
+    )
+
+
 def _retry_or_escalate(doc_retries: int, text: str) -> dict[str, Any]:
     """Return retry state or escalate after exhausting doc_retries (system errors only)."""
     if doc_retries >= 1:
@@ -547,26 +568,26 @@ async def node_identify(state: QAState) -> dict[str, Any]:  # noqa: C901
     # Handoff nombró una póliza específica: si está entre las del cliente,
     # lockeamos directo a ella (la voz llamó por ESA póliza) — sin lista.
     # Se busca en la lista completa: cobranza puede llamar por una no vigente.
-    hint = state.get("handoff_poliza_hint") if handoff_doc else None
-    if hint:
-        hint_num = re.sub(r"(?i)^POL-", "", str(hint)).strip().lstrip("0")
-        match = next(
-            (p for p in polizas if str(p.get("numero_poliza", "")).lstrip("0") == hint_num),
-            None,
-        )
-        if match is not None:
-            locked = {
-                **await _lock_poliza(match),
-                "cliente_doc": doc_input,
-                # Solo la póliza llamada: el resto no es tema de esta conversación.
-                "polizas_list": [match],
-            }
-            # Si el cliente escribió algo real ("¿cuál póliza?", "ya pagué"), el
-            # LLM lo contesta ya con el contexto de la llamada; el menú genérico
-            # lo ignoraba. Los taps de la plantilla sí reciben el menú.
-            if text.strip().lower() not in {"si_ayudenme", "mas_tarde", ""}:
-                locked["messages"] = []
-            return locked
+    # Aplica también si el cliente tecleó la cédula a mano (handoff sin
+    # documento): la captura del 30-sep preguntaba "¿cuál póliza?" porque aquí
+    # se ignoraba el hint y se listaban todas.
+    match = _match_hint(
+        polizas, state.get("handoff_poliza_hint") or state.get("handoff_numero_poliza")
+    )
+    if match is not None:
+        locked = {
+            **await _lock_poliza(match),
+            "cliente_doc": doc_input,
+            # Solo la póliza llamada: el resto no es tema de esta conversación.
+            "polizas_list": [match],
+        }
+        # Si el cliente escribió algo real ("¿cuál póliza?", "ya pagué"), el
+        # LLM lo contesta ya con el contexto de la llamada; el menú genérico
+        # lo ignoraba. Los taps de la plantilla y el documento tecleado sí
+        # reciben el menú.
+        if text.strip().lower() not in _TEMPLATE_TAPS and not _DOC_LIKE_RE.match(text):
+            locked["messages"] = []
+        return locked
 
     polizas = _vigentes_unicas(polizas)
 
@@ -722,6 +743,36 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:  # noqa: C901
             "messages": [AIMessage(content=T_08)],
         }
 
+    page = state.get("polizas_page", 0)
+
+    # Re-tap del botón de la plantilla: no es una elección fallida (29-oct el
+    # tap + una pregunta sumaron 2 intentos y escaló sin que nadie eligiera).
+    if text.strip().lower() in _TEMPLATE_TAPS:
+        return {
+            "node": "awaiting_policy_choice",
+            "messages": [_polizas_list_message(polizas, page=page)],
+        }
+
+    # Pregunta frecuente en vez de elección ("¿por cuál póliza me contactaste?",
+    # "ya pagué"): se contesta y se vuelve a mostrar la lista, sin contar
+    # intento. Si el handoff trae la póliza y está en la lista, se fija directo.
+    faq = match_faq(text)
+    if faq is not None:
+        if faq.escalate:
+            return {
+                "node": "escalating",
+                "escalation_reason": f"faq_{faq.key}",
+                "messages": [AIMessage(content=faq.answer)],
+            }
+        if faq.key == "cual_poliza":
+            hinted = _match_hint(polizas, state.get("handoff_numero_poliza"))
+            if hinted is not None:
+                return {**await _lock_poliza(hinted), "polizas_list": [hinted]}
+        lista = _polizas_list_message(polizas, page=page)
+        lista.content = f"{faq.answer}\n\n{lista.content}"
+        lista.additional_kwargs["interactive"]["body"] = lista.content
+        return {"node": "awaiting_policy_choice", "messages": [lista]}
+
     resolved: dict[str, Any] | None = None
 
     # 2. Interactive list tap — text == poliza_id (matches row id we sent)
@@ -761,7 +812,6 @@ async def node_choose_policy(state: QAState) -> dict[str, Any]:  # noqa: C901
                 "escalation_reason": "policy_choice_unresolved",
                 "messages": [AIMessage(content=T_08)],
             }
-        page = state.get("polizas_page", 0)
         return {
             "node": "awaiting_policy_choice",
             "choice_retries": retries,

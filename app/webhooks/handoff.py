@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.config.settings import settings
+from app.features.qa.state import QAState
 from app.integrations.meta_cloud import _hash_phone
 from app.memory.case_store import Case
 from app.security.rate_limiter import check_rate_limit
@@ -129,7 +130,21 @@ async def handoff_no_answer(body: NoAnswerHandoff, request: Request) -> dict[str
             await session.execute(select(Case).where(Case.case_id == case_id))
         ).scalar_one_or_none()
         if existing is not None:
+            # La plantilla va UNA vez por caso (D-19), pero la voz reusa el
+            # case_id del deudor en cada campaña: si el primer handoff vino sin
+            # póliza/documento (visto con "N/A" 30-sep), el hilo quedaba viejo
+            # para siempre. Se re-siembra igual y se completa la póliza del caso.
+            if (existing.poliza_id or "N/A") == "N/A" and body.numero_poliza != "N/A":
+                existing.poliza_id = body.numero_poliza
+                await session.commit()
             log.info("handoff.no_answer.idempotent_skip", case_id=case_id)
+            await _seed_qa_thread(
+                request,
+                phone=body.phone,
+                numero_poliza=body.numero_poliza,
+                cliente_nombre=body.cliente_nombre,
+                documento=body.documento,
+            )
             return {"case_id": case_id, "sent": False}
         session.add(
             Case(
@@ -229,23 +244,19 @@ async def link_cupon(body: LinkCuponRequest, request: Request) -> dict[str, str 
     return {"case_id": str(body.case_id), "sent": True}
 
 
-async def _thread_is_for(checkpointer: object, phone: str, numero_poliza: str) -> bool | None:
-    """None si no hay hilo; True si ya es un handoff por esta misma póliza.
-
-    Si leer el checkpoint falla se asume "otra póliza" (reset, el comportamiento
-    de siempre) en vez de dejar estado viejo.
-    """
+async def _peek_thread(checkpointer: object, phone: str) -> dict[str, object] | None:
+    """channel_values del hilo, o None si no existe o no se pudo leer."""
     try:
         existing = await checkpointer.aget({"configurable": {"thread_id": phone}})  # type: ignore[attr-defined]
     except Exception as exc:  # noqa: BLE001
+        # No se pudo leer: se trata como "otra póliza" (reset, lo de siempre)
+        # en vez de dejar estado viejo.
         log.warning("handoff.thread_peek_failed", error_type=type(exc).__name__)
-        return False
+        return {}
     if existing is None:
         return None
     values = existing.get("channel_values", {})
-    return bool(values.get("handoff_numero_poliza")) and str(
-        values["handoff_numero_poliza"]
-    ) == str(numero_poliza)
+    return dict(values) if isinstance(values, dict) else {}
 
 
 async def _seed_qa_thread(  # noqa: C901
@@ -276,22 +287,34 @@ async def _seed_qa_thread(  # noqa: C901
     if qa_graph is None:
         return
 
+    # Misma póliza = misma conversación: la voz manda varios handoffs por
+    # llamada (mensaje2 del pago, send_whatsapp del modelo) y la campaña
+    # reintenta no_answer; borrar el hilo en cada uno perdía el mensaje
+    # anterior y cualquier comprobante en curso. Se conserva el estado previo
+    # y se re-siembra fusionado: aupdate_state sobre un hilo existente falla
+    # con InvalidUpdateError ("Ambiguous update") — visto en prod 29-oct —,
+    # sobre un hilo vacío se resuelve a __start__ y funciona.
+    carry: dict[str, object] = {}
     checkpointer = getattr(request.app.state, "checkpointer", None)
     if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
         try:
-            # Misma póliza = misma conversación: la voz manda varios handoffs
-            # por llamada (mensaje2 del pago, send_whatsapp del modelo); borrar
-            # el hilo en cada uno perdía el mensaje anterior y cualquier
-            # comprobante en curso. Solo se reinicia al cambiar de póliza.
-            keep = await _thread_is_for(checkpointer, phone, numero_poliza)
-            if keep is None:
+            previous = await _peek_thread(checkpointer, phone)
+            if previous is None:
                 log.info("handoff.thread_empty", phone_hash=_hash_phone(phone))
-            elif keep:
-                log.info("handoff.thread_kept", phone_hash=_hash_phone(phone))
             else:
+                same = str(previous.get("handoff_numero_poliza") or "") == numero_poliza.strip()
+                if same and numero_poliza.strip():
+                    carry = {
+                        k: v
+                        for k, v in previous.items()
+                        if k in QAState.__annotations__ and k != "_inbound_media"
+                    }
+                    log.info("handoff.thread_kept", phone_hash=_hash_phone(phone))
                 await checkpointer.adelete_thread(phone)
-                log.info("handoff.no_answer.thread_reset", phone_hash=_hash_phone(phone))
+                if not carry:
+                    log.info("handoff.no_answer.thread_reset", phone_hash=_hash_phone(phone))
         except Exception as exc:  # noqa: BLE001
+            carry = {}
             log.warning("handoff.no_answer.thread_reset_failed", error_type=type(exc).__name__)
 
     # "N/A" = VOICE no tenía número de póliza (deudor incompleto). Sembrarlo
@@ -299,19 +322,24 @@ async def _seed_qa_thread(  # noqa: C901
     if numero_poliza.strip().upper() in {"", "N/A"}:
         numero_poliza = ""
     seed: dict[str, object] = {
+        **carry,
         "wa_phone": phone.lstrip("+"),
-        "cliente_nombre": cliente_nombre,
+        "cliente_nombre": cliente_nombre or carry.get("cliente_nombre"),
     }
     if numero_poliza:
         seed["handoff_numero_poliza"] = numero_poliza
     if contexto:
         seed["handoff_contexto"] = contexto
+    prev = carry.get("messages")
+    previous_msgs: list[object] = list(prev) if isinstance(prev, list) else []
     if mensaje:
         # Lo que ARIA ya le escribió desde la llamada entra al historial: sin
         # esto el LLM no sabía qué se le dijo al cliente ni por qué.
         from langchain_core.messages import AIMessage
 
-        seed["messages"] = [AIMessage(content=mensaje)]
+        seed["messages"] = [*previous_msgs, AIMessage(content=mensaje)]
+    elif previous_msgs:
+        seed["messages"] = previous_msgs
 
     if documento:
         # La voz llamó a esta persona por su póliza: YA tenemos su documento,

@@ -51,6 +51,17 @@ FAQS: tuple[Faq, ...] = (
         "este chat y cartera lo verifica.",
     ),
     Faq(
+        "cual_poliza",
+        re.compile(
+            r"cu[aá]l (de las )?p[oó]liza|por cu[aá]l|de (qu[eé]|cu[aá]l) (seguro|p[oó]liza)"
+            r"|qu[eé] p[oó]liza|me recuerdas (qu[eé]|cu[aá]l) p[oó]liza",
+            re.I,
+        ),
+        "Te escribimos desde cartera de DPG Seguros por la gestión de tu póliza. "
+        "Si tienes varias, elige en la lista la que quieres consultar y te digo "
+        "su estado y saldo.",
+    ),
+    Faq(
         "ya_pague",
         re.compile(
             r"ya (lo |la |las |se )?(pagu[eé]|pague|cancel[eé]|pag[oó]|cancel[oó])|hice el pago"
