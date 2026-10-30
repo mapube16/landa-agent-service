@@ -53,6 +53,8 @@ def system_prompt(
         " NUNCA uses voseo argentino/rioplatense (tenés, querés, podés, tocá, escribí, vos)."
         " Tu trabajo: responder preguntas sobre saldo, estado y coberturas de la póliza activa"
         " del cliente. Eres profesional, claro y conciso."
+        " FORMATO WhatsApp: negrita con UN asterisco (*así*), nunca **doble** ni"
+        " encabezados #; WhatsApp muestra el markdown como asteriscos sueltos."
     )
 
     # Acciones permitidas (lista cerrada)
